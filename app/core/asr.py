@@ -12,9 +12,9 @@ from app.core import models
 
 _LOGGER = logging.getLogger(__name__)
 _OOM_SIGNATURES: tuple[str, ...] = (
-    "CUDA out of memory",
+    "cuda out of memory",
     "failed to allocate memory",
-    "CUBLAS_STATUS_ALLOC_FAILED",
+    "cublas",
 )
 
 
@@ -94,7 +94,7 @@ def _iter_words(segments: Iterable[object], keep_punct: bool) -> Iterable[Word]:
 
 
 def _should_retry_on_cpu(error: Exception) -> bool:
-    message = str(error)
+    message = str(error).lower()
     return any(signature in message for signature in _OOM_SIGNATURES)
 
 
@@ -134,11 +134,7 @@ def transcribe_to_words(
         return list(_iter_words(segments, keep_punct))
     except (RuntimeError, ct_errors.CTranslate2Error) as error:  # pragma: no cover - hardware specific
         if device.lower() != "cpu" and not _retried and _should_retry_on_cpu(error):
-            _LOGGER.warning(
-                "CUDA OOM detected for %s on device %s, retrying on CPU int8",
-                audio_path,
-                device,
-            )
+            _LOGGER.warning("CUDA OOM → fallback to CPU int8")
             return transcribe_to_words(
                 audio_path,
                 model,

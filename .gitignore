@@ -5,12 +5,15 @@ __pycache__/
 
 # Virtual environments
 .venv/
+/.venv/
 .env/
 .env.*
 
 # Packaging / build outputs
-build/
-dist/
+/dist/
+/dist_*/
+/build/cache/
+/build/*.log
 *.egg-info/
 *.spec
 
@@ -30,6 +33,7 @@ dist/
 *.exe
 *.dll
 *.pyd
+/resources/ffmpeg/*.exe
 
 # Misc
 Thumbs.db

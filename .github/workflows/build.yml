@@ -1,17 +1,20 @@
-name: Build (bootstrap)
-
-on:
-  push:
-    branches: ["main", "codex/**"]
-  pull_request:
-    branches: ["main"]
-
+name: build-win
+on: [workflow_dispatch]
 jobs:
-  lint:
-    runs-on: ubuntu-latest
+  win-exe:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Show Python version
-        run: python --version
-      - name: Echo placeholder
-        run: echo "CI pipeline will be expanded in future tasks"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          .\build\build.ps1 -Device cpu -ComputeType int8
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: TRANSCRIBATORAUD-win
+          path: dist_TRANSCRIBATORAUD/**

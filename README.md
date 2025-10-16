@@ -1,5 +1,22 @@
 # TRANSCRIBATORAUD
 
+## Локальная сборка EXE (Windows)
+1) Установи Python 3.11 x64.
+2) В PowerShell в корне проекта:
+   ```powershell
+   .\build\build.ps1 -Device cuda -ComputeType float16   # или -Device cpu -ComputeType int8
+   ```
+   Скрипт сам:
+   - создаст/активирует venv;
+   - поставит зависимости + PyInstaller;
+   - локально сгенерирует ffmpeg/ffprobe в `resources\ffmpeg` (без коммитов в репо);
+   - соберёт EXE в `dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe`.
+3) Запуск:
+   ```powershell
+   .\dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe --help
+   ```
+
+
 TRANSCRIBATORAUD — офлайн-приложение для пакетной транскрибации аудио с
 таймкодами слов. Репозиторий подготовлен для дальнейшей реализации CLI и GUI
 на базе PySide6 и faster-whisper.
