@@ -1,23 +1,5 @@
 # TRANSCRIBATORAUD
 
-## One-click локальная сборка EXE (Windows)
-Требуется установленный Python 3.11 x64 и доступ в интернет для скачивания ffmpeg.
-
-1. Запусти `build/RunMe.bat` двойным кликом (или `powershell -File .\build\RunMe.ps1`).
-2. Скрипт автоматически:
-   - создаст и активирует виртуальное окружение `.venv`;
-   - установит зависимости проекта и PyInstaller;
-   - скачает `ffmpeg.exe` и `ffprobe.exe` в `resources\ffmpeg` (без попадания в git);
-   - сгенерирует стартовый `config.yaml` с режимом `device: auto`;
-   - соберёт `dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe`.
-3. Запусти собранное приложение:
-   ```powershell
-   .\dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe --help
-   ```
-
-Дополнительно доступен режим очистки: `build/RunMe.ps1 -Clean` удалит временные каталоги перед сборкой.
-
-
 TRANSCRIBATORAUD — офлайн-приложение для пакетной транскрибации аудио с
 таймкодами слов. Репозиторий подготовлен для дальнейшей реализации CLI и GUI
 на базе PySide6 и faster-whisper.
@@ -64,6 +46,24 @@ source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
 pip install -r requirements.txt
 python app/main.py
 ```
+
+### One-click сборка EXE (Windows)
+
+Требуется установленный Python 3.11 x64 и доступ в интернет для скачивания ffmpeg.
+
+1. Двойной клик по `build/RunMe.bat` (или `powershell -File .\build\RunMe.ps1`).
+2. Скрипт автоматически:
+   - создаст и активирует виртуальное окружение `.venv`;
+   - установит зависимости проекта и PyInstaller;
+   - скачает `ffmpeg.exe` и `ffprobe.exe` в `resources\ffmpeg` (файлы не попадают в git);
+   - сгенерирует `config.yaml` с настройками `device: auto`;
+   - соберёт `dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe`.
+3. Запусти собранное приложение:
+   ```powershell
+   .\dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe --help
+   ```
+
+Опция `build/RunMe.ps1 -Clean` удаляет временные каталоги перед повторной сборкой.
 
 По умолчанию запускается GUI-заготовка. Для CLI доступна полноценная утилита:
 
