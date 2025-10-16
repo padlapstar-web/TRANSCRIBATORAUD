@@ -96,8 +96,13 @@ pip install -r requirements.txt
 pip install pyinstaller
 
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\build\Ensure-FFmpeg.ps1"
-
 $ffdir = Join-Path $root "resources\ffmpeg"
+$ffExe = Join-Path $ffdir "ffmpeg.exe"
+$ffProbe = Join-Path $ffdir "ffprobe.exe"
+if (!(Test-Path $ffExe) -or !(Test-Path $ffProbe)) {
+  Write-Error "FFmpeg not prepared in resources\\ffmpeg"
+  exit 1
+}
 if (Test-Path $ffdir) { $env:PATH = "$ffdir;$env:PATH" }
 
 if (!(Test-Path .\pyinstaller.spec)) {
@@ -125,8 +130,17 @@ compute_type: auto
 models_dir: "$(($appdata.Replace('\','\\')))\\models"
 "@ | Out-File -Encoding UTF8 (Join-Path $appdata "config.yaml")
 
-pyinstaller --clean pyinstaller.spec | Tee-Object -FilePath .\build\build.log
+$env:PYTHONNOUSERSITE = "1"
+python -m PyInstaller --clean pyinstaller.spec | Tee-Object -FilePath .\build\build.log
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "PyInstaller failed. See build\\build.log"
+  exit $LASTEXITCODE
+}
+if (!(Test-Path "./dist_TRANSCRIBATORAUD/TRANSCRIBATORAUD.exe")) {
+  Write-Error "EXE not found after build"
+  exit 1
+}
 
 Write-Host ""
-Write-Host "READY: dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe"
-Write-Host "Run:   dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe --help"
+Write-Host "READY: dist_TRANSCRIBATORAUD\\TRANSCRIBATORAUD.exe"
+Write-Host "Run:   dist_TRANSCRIBATORAUD\\TRANSCRIBATORAUD.exe --help"

@@ -1,23 +1,25 @@
 #Requires -Version 5.1
+Param(
+  [string]$OutDir = "$(Resolve-Path "$PSScriptRoot\..\resources\ffmpeg").Path"
+)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
-Param(
-  [string]$OutDir = "$(Resolve-Path "$PSScriptRoot\..\resources\ffmpeg").Path"
-)
 New-Item -Force -ItemType Directory -Path $OutDir | Out-Null
-
 $ff = Join-Path $OutDir "ffmpeg.exe"
 $fp = Join-Path $OutDir "ffprobe.exe"
-if ((Test-Path $ff) -and (Test-Path $fp)) { return }
+if ((Test-Path $ff) -and (Test-Path $fp)) {
+  Write-Host "FFmpeg already present -> $OutDir"
+  exit 0
+}
 
-$cache = "$(Resolve-Path "$PSScriptRoot\cache").Path"
+$cache = Join-Path $PSScriptRoot "cache"
 New-Item -Force -ItemType Directory -Path $cache | Out-Null
 $zip = Join-Path $cache "ffmpeg-win64.zip"
 $url = "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip"
 
-Write-Host "Downloading FFmpeg to $zip"
+Write-Host "Downloading FFmpeg -> $zip"
 Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
 
 $tmp = Join-Path $cache "unpack"
