@@ -4,27 +4,29 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 
-datas = collect_data_files("PySide6")
 hiddenimports = []
 try:
     hiddenimports += collect_submodules("ct2")
 except Exception:
     pass
 hiddenimports += collect_submodules("faster_whisper")
+hiddenimports += list(collect_submodules("xml.parsers"))
 hiddenimports += [
-    "xml.parsers.expat",
     "pkg_resources",
     "importlib_metadata",
 ]
+
+datas = [
+    ("resources/ffmpeg/ffmpeg.exe", "resources/ffmpeg"),
+    ("resources/ffmpeg/ffprobe.exe", "resources/ffmpeg"),
+]
+datas += collect_data_files("PySide6")
 
 
 a = Analysis(
     ["app/main.py"],
     pathex=[],
-    binaries=[
-        ("resources/ffmpeg/ffmpeg.exe", "resources/ffmpeg"),
-        ("resources/ffmpeg/ffprobe.exe", "resources/ffmpeg"),
-    ],
+    binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
 )

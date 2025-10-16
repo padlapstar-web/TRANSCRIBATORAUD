@@ -1,82 +1,109 @@
 #Requires -Version 5.1
-[CmdletBinding()]
-Param([switch]$Clean)
+param(
+    [switch]$Clean,
+    [string]$PyPreferred = "3.12"
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
-function New-PyInvoker {
-    param(
-        [string]$Command,
-        [string[]]$Arguments
+function Resolve-PythonInterpreter {
+    param([string]$Version)
+
+    function Resolve-CandidatePath {
+        param([string]$Candidate)
+        if ([string]::IsNullOrWhiteSpace($Candidate)) { return $null }
+        if ($Candidate -match '(?i)(anaconda|miniconda)') { return $null }
+        if (Test-Path $Candidate) { return (Resolve-Path $Candidate).Path }
+        return $null
+    }
+
+    $candidates = @()
+
+    $directPaths = @(
+        "$Env:LocalAppData\Programs\Python\Python$Version\python.exe",
+        "C:\\Program Files\\Python$Version\\python.exe",
+        "C:\\Program Files (x86)\\Python$Version\\python.exe"
     )
+    foreach ($path in $directPaths) {
+        $resolved = Resolve-CandidatePath -Candidate $path
+        if ($resolved) { $candidates += $resolved }
+    }
 
-    return {
-        param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
-        & $Command @Arguments @Args
-    }.GetNewClosure()
-}
+    $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
+    if ($pyLauncher) {
+        $pyArgs = @("-$Version", "-c", "import sys; print(sys.executable)")
+        $result = (& $pyLauncher.Path @pyArgs 2>$null)
+        if ($LASTEXITCODE -eq 0) {
+            $text = if ($result -is [Array]) { $result[-1] } else { $result }
+            $resolved = Resolve-CandidatePath -Candidate ($text.Trim())
+            if ($resolved) { $candidates += $resolved }
+        }
+    }
 
-function Get-Py {
-    $candidates = @(
-        New-PyInvoker -Command "py" -Arguments @("-3.12"),
-        New-PyInvoker -Command "py" -Arguments @("-3.11"),
-        New-PyInvoker -Command "py" -Arguments @("-3.10"),
-        New-PyInvoker -Command "python" -Arguments @()
-    )
-
-    foreach ($candidate in $candidates) {
+    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($pythonCmd -and ($Version -eq "3.12")) {
         try {
-            & $candidate "-c" "import sys" 2>$null
-            if ($LASTEXITCODE -eq 0) { return $candidate }
+            $reported = (& $pythonCmd.Path -c "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null).Trim()
+            if ($reported -eq "3.12") {
+                $resolved = Resolve-CandidatePath -Candidate $pythonCmd.Path
+                if ($resolved) { $candidates += $resolved }
+            }
         } catch {}
     }
 
-    throw "Python 3.10-3.12 not found"
+    $unique = @()
+    foreach ($candidate in $candidates) {
+        if ($candidate -and ($unique -notcontains $candidate)) {
+            $unique += $candidate
+        }
+    }
+
+    if ($unique.Count -gt 0) { return $unique[0] }
+    throw "Python $Version (python.org) not found. Install it from python.org and re-run."
 }
 
-$root = (Resolve-Path "$PSScriptRoot\..\").Path
+$root = (Resolve-Path (Join-Path $PSScriptRoot ".." )).Path
 Set-Location $root
 
 if ($Clean.IsPresent) {
     Remove-Item -Recurse -Force .venv, "build\pyinstaller", dist, build\*.log, build\cache -ErrorAction SilentlyContinue
 }
 
-$PY = Get-Py
-$pythonPath = (& $PY "-c" "import pathlib, sys; print(pathlib.Path(sys.executable).resolve())" 2>$null).Trim()
-Write-Host ("Using interpreter: " + $pythonPath)
+$pythonExe = Resolve-PythonInterpreter -Version $PyPreferred
+Write-Host ("Using interpreter: " + $pythonExe)
 
-& $PY "-m" "venv" ".venv"
+if (Test-Path .\.venv) {
+    Remove-Item -Recurse -Force .\.venv -ErrorAction SilentlyContinue
+}
+
+& $pythonExe -m venv .\.venv
 $venvPython = Join-Path $root ".venv\Scripts\python.exe"
 if (!(Test-Path $venvPython)) { throw "Missing .\\.venv\\Scripts\\python.exe" }
 
-& $venvPython "-m" "pip" "install" "--upgrade" "pip"
-& $venvPython "-m" "pip" "install" "-r" "requirements.txt"
-& $venvPython "-m" "pip" "install" "pyinstaller"
+& $venvPython -m pip install --upgrade pip
+& $venvPython -m pip install -r (Join-Path $root "requirements.txt")
+& $venvPython -m pip install pyinstaller
 
-. "$PSScriptRoot\Ensure-FFmpeg.ps1"
-Ensure-FFmpeg -OutDir (Join-Path $root "resources\ffmpeg")
-
-$ffDir = Join-Path $root "resources\ffmpeg"
-if (!(Test-Path (Join-Path $ffDir "ffmpeg.exe")) -or !(Test-Path (Join-Path $ffDir "ffprobe.exe"))) {
+$ffOutDir = Join-Path $root "resources\ffmpeg"
+& (Join-Path $PSScriptRoot "Ensure-FFmpeg.ps1") -OutDir $ffOutDir
+if (!(Test-Path (Join-Path $ffOutDir "ffmpeg.exe")) -or !(Test-Path (Join-Path $ffOutDir "ffprobe.exe"))) {
     throw "FFmpeg not prepared in resources\\ffmpeg"
 }
-$env:PATH = "$ffDir;$env:PATH"
+$env:PATH = "$ffOutDir;$env:PATH"
 
-$pyinstallerExe = Join-Path $root ".venv\Scripts\pyinstaller.exe"
-if (!(Test-Path $pyinstallerExe)) { throw "PyInstaller executable not found" }
-
-& $pyinstallerExe "--noconfirm" "--clean" "--workpath" ".\build\pyinstaller" "--distpath" ".\dist" ".\build\TRANSCRIBATORAUD.spec" |
-    Tee-Object -FilePath .\build\build.log
+$buildLog = Join-Path $root "build\build.log"
+& $venvPython -m PyInstaller -y (Join-Path $root "build\TRANSCRIBATORAUD.spec") 2>&1 |
+    Tee-Object -FilePath $buildLog
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller failed. See build\\build.log"
 }
 
 $exe = Join-Path $root "dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe"
 if (!(Test-Path $exe)) {
-    throw "EXE not found after build"
+    throw "EXE not found after build: $exe"
 }
 
 Write-Host "READY: $exe"
