@@ -9,27 +9,72 @@ $ErrorActionPreference = "Stop"
 try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new() } catch {}
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
-function Get-PyLauncher { if (Get-Command py -ErrorAction SilentlyContinue) { return "py" } return $null }
+function Find-PythonExe {
+  param([string[]]$Order = @("3.12","3.11","3.10"), [string]$Preferred = "auto")
 
-function Select-PythonVersion {
-  param([string]$Preferred = "auto")
-  $order = @("3.12","3.11","3.10")
-  if ($Preferred -ne "auto") { return $Preferred }
+  if ($Preferred -ne "auto") {
+    $candidate = $null
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+      try {
+        $candidate = (& py -$Preferred -c "import sys,sysconfig;print(sys.executable)" 2>$null).Trim()
+      } catch {}
+    }
+    if (-not $candidate -and (Get-Command python -ErrorAction SilentlyContinue)) {
+      try { $candidate = (& python -c "import sys;print(sys.executable)" 2>$null).Trim() } catch {}
+    }
+    if ($candidate -and (Test-Path $candidate)) { return $candidate }
+  }
 
-  $py = Get-PyLauncher
-  if ($py) {
-    $list = & $py -0p 2>$null
-    foreach ($v in $order) {
-      if ($list -match " -$([Regex]::Escape($v)) ") { return $v }
+  $candidates = @()
+  $regRoots = @(
+    "HKCU:\Software\Python\PythonCore",
+    "HKLM:\Software\Python\PythonCore",
+    "HKLM:\Software\WOW6432Node\Python\PythonCore"
+  )
+  foreach ($root in $regRoots) {
+    foreach ($v in $Order) {
+      $subKey = Join-Path $root $v
+      try {
+        $install = Get-ItemProperty -Path "$subKey\InstallPath" -ErrorAction Stop
+        $path = Join-Path $install.'(default)' 'python.exe'
+        if ($path -and (Test-Path $path)) { $candidates += $path }
+      } catch {}
     }
   }
-  if (Get-Command python -ErrorAction SilentlyContinue) {
-    try {
-      $v = (& python -c "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')" ).Trim()
-      if ($order -contains $v) { return $v }
-    } catch {}
+
+  $commonDirs = @(
+    "$env:LocalAppData\Programs\Python",
+    "$env:ProgramFiles\Python312",
+    "$env:ProgramFiles\Python311",
+    "$env:ProgramFiles\Python310",
+    "$env:ProgramFiles(x86)\Python312",
+    "$env:ProgramFiles(x86)\Python311",
+    "$env:ProgramFiles(x86)\Python310"
+  )
+  foreach ($dir in $commonDirs) {
+    if (Test-Path $dir) {
+      $candidates += (Get-ChildItem -Path $dir -Recurse -Filter python.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+    }
   }
-  throw "Python 3.12/3.11/3.10 не найден. Установи любой из них и перезапусти."
+
+  if (Get-Command py -ErrorAction SilentlyContinue) {
+    $list = & py -0p 2>$null
+    foreach ($v in $Order) {
+      $match = ($list | Select-String " -$([Regex]::Escape($v)) ")
+      if ($match) {
+        $parts = ($match.Line -split '\s+',3)
+        if ($parts.Length -ge 3 -and (Test-Path $parts[2])) { $candidates += $parts[2] }
+      }
+    }
+  }
+
+  $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+  if ($pythonCmd) { $candidates += $pythonCmd.Source }
+
+  $candidates = $candidates | Where-Object { $_ } | Select-Object -Unique
+  if ($candidates.Count -gt 0) { return $candidates[0] }
+
+  throw "Python 3.12/3.11/3.10 not found. Install one of them and re-run." 
 }
 
 $root = (Resolve-Path "$PSScriptRoot\..\").Path
@@ -39,13 +84,11 @@ if ($Clean.IsPresent) {
   Remove-Item -Recurse -Force .venv, "build\cache", dist_*, build\*.log -ErrorAction SilentlyContinue
 }
 
-$ver = Select-PythonVersion -Preferred $Python
-Write-Host ("Using Python " + $ver)
+$pyExe = Find-PythonExe -Order @("3.12","3.11","3.10") -Preferred $Python
+Write-Host ("Using interpreter: " + $pyExe)
 
-if (!(Test-Path .\.venv)) {
-  if (Get-PyLauncher) { & py -$ver -m venv .venv } else { & python -m venv .venv }
-}
-if (!(Test-Path .\.venv\Scripts\Activate.ps1)) { throw "Не найден .\\.venv\\Scripts\\Activate.ps1" }
+if (!(Test-Path .\.venv)) { & "$pyExe" -m venv .venv }
+if (!(Test-Path .\.venv\Scripts\Activate.ps1)) { throw "Missing .\\.venv\\Scripts\\Activate.ps1" }
 & .\.venv\Scripts\Activate.ps1
 
 python -m pip install --upgrade pip
