@@ -99,7 +99,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ".\build\Ensure-FFmpeg.ps1"
 $ffdir = Join-Path $root "resources\ffmpeg"
 $ffExe = Join-Path $ffdir "ffmpeg.exe"
 $ffProbe = Join-Path $ffdir "ffprobe.exe"
-if (!(Test-Path $ffExe) -or !(Test-Path $ffProbe)) {
+$ffok  = (Test-Path $ffExe) -and (Test-Path $ffProbe)
+if (-not $ffok) {
+  $wrong = Join-Path (Join-Path $root "resources") "ffmpeg.Path"
+  if (Test-Path $wrong) {
+    New-Item -Force -ItemType Directory -Path $ffdir | Out-Null
+    Copy-Item "$wrong\*" $ffdir -Force
+    $ffok = (Test-Path $ffExe) -and (Test-Path $ffProbe)
+  }
+}
+if (-not $ffok) {
   Write-Error "FFmpeg not prepared in resources\\ffmpeg"
   exit 1
 }

@@ -1,12 +1,14 @@
 #Requires -Version 5.1
-Param(
-  [string]$OutDir = "$(Resolve-Path "$PSScriptRoot\..\resources\ffmpeg").Path"
-)
+Param([string]$OutDir)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
+if (-not $OutDir) {
+  $OutDir = (Resolve-Path (Join-Path $PSScriptRoot "..\resources\ffmpeg")).Path
+}
 New-Item -Force -ItemType Directory -Path $OutDir | Out-Null
+
 $ff = Join-Path $OutDir "ffmpeg.exe"
 $fp = Join-Path $OutDir "ffprobe.exe"
 if ((Test-Path $ff) -and (Test-Path $fp)) {
