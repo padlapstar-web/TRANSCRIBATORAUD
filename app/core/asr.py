@@ -6,7 +6,7 @@ import logging
 import string
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 from app.core import models
 
@@ -98,11 +98,45 @@ def _should_retry_on_cpu(error: Exception) -> bool:
     return any(signature in message for signature in _OOM_SIGNATURES)
 
 
+def _normalise_device(device: Optional[str], compute_type: Optional[str]) -> Tuple[str, str]:
+    device_value = (device or "auto").strip().lower()
+    compute_value = (compute_type or "auto").strip().lower() if compute_type else "auto"
+
+    resolved_device = device_value
+    default_compute = "int8"
+    if device_value in {"", "auto"}:
+        resolved_device = "cpu"
+        try:  # pragma: no cover - hardware dependent branch
+            import torch  # type: ignore
+
+            if hasattr(torch, "cuda") and torch.cuda.is_available():
+                resolved_device = "cuda"
+                default_compute = "float16"
+            else:
+                default_compute = "int8"
+        except Exception:  # pragma: no cover - torch may be absent
+            resolved_device = "cpu"
+            default_compute = "int8"
+    elif device_value == "cuda":
+        resolved_device = "cuda"
+        default_compute = "float16"
+    else:
+        resolved_device = device_value
+        default_compute = "int8"
+
+    if compute_value in {"", "auto"}:
+        resolved_compute = default_compute
+    else:
+        resolved_compute = compute_value
+
+    return resolved_device, resolved_compute
+
+
 def transcribe_to_words(
     path: Path,
     model: str,
-    device: str,
-    compute_type: str,
+    device: Optional[str],
+    compute_type: Optional[str],
     language: Optional[str],
     keep_punct: bool,
     vad: bool,
@@ -122,8 +156,12 @@ def transcribe_to_words(
     else:
         language_arg = language
 
+    device = device or "auto"
+    compute_type = compute_type or "auto"
+    resolved_device, resolved_compute_type = _normalise_device(device, compute_type)
+
     try:
-        whisper = _instantiate_model(model, device, compute_type)
+        whisper = _instantiate_model(model, resolved_device, resolved_compute_type)
         segments, _info = whisper.transcribe(
             str(audio_path),
             beam_size=beam_size,
@@ -133,7 +171,7 @@ def transcribe_to_words(
         )
         return list(_iter_words(segments, keep_punct))
     except (RuntimeError, ct_errors.CTranslate2Error) as error:  # pragma: no cover - hardware specific
-        if device.lower() != "cpu" and not _retried and _should_retry_on_cpu(error):
+        if resolved_device.lower() != "cpu" and not _retried and _should_retry_on_cpu(error):
             _LOGGER.warning("CUDA OOM → fallback to CPU int8")
             return transcribe_to_words(
                 audio_path,

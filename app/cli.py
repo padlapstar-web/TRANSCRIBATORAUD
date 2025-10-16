@@ -43,13 +43,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default="base", help="Local Whisper model name.")
     parser.add_argument(
         "--device",
-        default="cpu",
-        help="Device for inference (cpu or cuda).",
+        default="auto",
+        help="Device for inference (auto, cpu or cuda).",
     )
     parser.add_argument(
         "--compute_type",
-        default="int8",
-        help="CTranslate2 compute type (int8, float16, float32, ...).",
+        default="auto",
+        help="CTranslate2 compute type (auto, int8, float16, float32, ...).",
     )
     parser.add_argument(
         "--language",

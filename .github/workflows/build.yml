@@ -8,11 +8,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Build
+      - name: Build (RunMe)
         shell: pwsh
         run: |
           Set-ExecutionPolicy Bypass -Scope Process -Force
-          .\build\build.ps1 -Device cpu -ComputeType int8
+          .\build\RunMe.ps1
       - name: Upload
         uses: actions/upload-artifact@v4
         with:

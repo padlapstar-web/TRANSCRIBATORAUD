@@ -26,8 +26,8 @@ class AppConfig:
     last_input: str | None = None
     last_output: str | None = None
     model: str = "base"
-    device: str = "cpu"
-    compute_type: str = "int8"
+    device: str = "auto"
+    compute_type: str = "auto"
     language: str = "auto"
     formats: List[str] = field(default_factory=lambda: ["jsonl"])
     keep_punct: bool = True

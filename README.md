@@ -1,20 +1,21 @@
 # TRANSCRIBATORAUD
 
-## Локальная сборка EXE (Windows)
-1) Установи Python 3.11 x64.
-2) В PowerShell в корне проекта:
-   ```powershell
-   .\build\build.ps1 -Device cuda -ComputeType float16   # или -Device cpu -ComputeType int8
-   ```
-   Скрипт сам:
-   - создаст/активирует venv;
-   - поставит зависимости + PyInstaller;
-   - локально сгенерирует ffmpeg/ffprobe в `resources\ffmpeg` (без коммитов в репо);
-   - соберёт EXE в `dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe`.
-3) Запуск:
+## One-click локальная сборка EXE (Windows)
+Требуется установленный Python 3.11 x64 и доступ в интернет для скачивания ffmpeg.
+
+1. Запусти `build/RunMe.bat` двойным кликом (или `powershell -File .\build\RunMe.ps1`).
+2. Скрипт автоматически:
+   - создаст и активирует виртуальное окружение `.venv`;
+   - установит зависимости проекта и PyInstaller;
+   - скачает `ffmpeg.exe` и `ffprobe.exe` в `resources\ffmpeg` (без попадания в git);
+   - сгенерирует стартовый `config.yaml` с режимом `device: auto`;
+   - соберёт `dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe`.
+3. Запусти собранное приложение:
    ```powershell
    .\dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe --help
    ```
+
+Дополнительно доступен режим очистки: `build/RunMe.ps1 -Clean` удалит временные каталоги перед сборкой.
 
 
 TRANSCRIBATORAUD — офлайн-приложение для пакетной транскрибации аудио с
