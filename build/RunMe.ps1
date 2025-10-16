@@ -114,10 +114,9 @@ if (-not $ffok) {
 }
 if (Test-Path $ffdir) { $env:PATH = "$ffdir;$env:PATH" }
 
-if (!(Test-Path .\pyinstaller.spec)) {
-  @"
+@"
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
-hidden=[]; 
+hidden=[];
 try: hidden+=collect_submodules("ct2")
 except Exception: pass
 hidden+=collect_submodules("faster_whisper")
@@ -127,9 +126,8 @@ a=Analysis(["app/main.py"], pathex=[], binaries=[
   ("resources/ffmpeg/ffprobe.exe","resources/ffmpeg"),
 ], datas=datas, hiddenimports=hidden)
 pyz=PYZ(a.pure); exe=EXE(pyz,a.scripts,name="TRANSCRIBATORAUD",console=True)
-coll=COLLECT(exe,a.binaries,a.zipfiles,a.datas,name="dist_TRANSCRIBATORAUD")
+coll=COLLECT(exe,a.binaries,a.zipfiles,a.datas,name="TRANSCRIBATORAUD")
 "@ | Out-File -Encoding UTF8 .\pyinstaller.spec
-}
 
 $appdata = Join-Path $env:APPDATA "TRANSCRIBATORAUD"
 New-Item -Force -ItemType Directory -Path $appdata | Out-Null
@@ -140,16 +138,27 @@ models_dir: "$(($appdata.Replace('\','\\')))\\models"
 "@ | Out-File -Encoding UTF8 (Join-Path $appdata "config.yaml")
 
 $env:PYTHONNOUSERSITE = "1"
-python -m PyInstaller --clean pyinstaller.spec | Tee-Object -FilePath .\build\build.log
+python -m PyInstaller --noconfirm --clean --workpath ".\build\pyinstaller" --distpath ".\dist" pyinstaller.spec | Tee-Object -FilePath .\build\build.log
 if ($LASTEXITCODE -ne 0) {
   Write-Error "PyInstaller failed. See build\\build.log"
   exit $LASTEXITCODE
 }
-if (!(Test-Path "./dist_TRANSCRIBATORAUD/TRANSCRIBATORAUD.exe")) {
-  Write-Error "EXE not found after build"
-  exit 1
+$exeA = ".\dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe"
+$exeB = ".\dist\TRANSCRIBATORAUD.exe"
+if (Test-Path $exeA) {
+  $exe = $exeA
+} elseif (Test-Path $exeB) {
+  $exe = $exeB
+} else {
+  $hit = Get-ChildItem -Recurse -Path .\dist\ -Filter TRANSCRIBATORAUD.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($hit) {
+    $exe = $hit.FullName
+  } else {
+    Write-Error "EXE not found after build (checked dist\\TRANSCRIBATORAUD and dist root)"
+    exit 1
+  }
 }
 
 Write-Host ""
-Write-Host "READY: dist_TRANSCRIBATORAUD\\TRANSCRIBATORAUD.exe"
-Write-Host "Run:   dist_TRANSCRIBATORAUD\\TRANSCRIBATORAUD.exe --help"
+Write-Host ("READY: " + $exe)
+Write-Host ("Run:   `"" + $exe + "`" --help")

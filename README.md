@@ -54,7 +54,7 @@ python app/main.py
 Скрипт автоматически выбирает установленный Python: **3.12 → 3.11 → 3.10**. Ничего указывать не нужно. Если подходящая версия не найдена, отобразится подсказка об установке.
 
 
-> 💡 "Двойной клик → EXE": просто открой `build/RunMe.bat`, и через пару минут готовый бинарь появится в `dist_TRANSCRIBATORAUD/`.
+> 💡 "Двойной клик → EXE": просто открой `build/RunMe.bat`, и через пару минут готовый бинарь появится в `dist/TRANSCRIBATORAUD/`.
 
 Требуется установленный Python 3.11 x64 и доступ в интернет для скачивания ffmpeg.
 
@@ -64,10 +64,10 @@ python app/main.py
    - установит зависимости проекта и PyInstaller;
    - скачает `ffmpeg.exe` и `ffprobe.exe` в `resources\ffmpeg` (файлы не попадают в git);
    - сгенерирует `config.yaml` с настройками `device: auto`;
-   - соберёт `dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe`.
+   - соберёт `dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe`.
 3. Запусти собранное приложение:
    ```powershell
-   .\dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe --help
+   .\dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe --help
    ```
 
 Опция `build/RunMe.ps1 -Clean` удаляет временные каталоги перед повторной сборкой.
