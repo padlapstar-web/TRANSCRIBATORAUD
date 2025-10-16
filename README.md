@@ -49,6 +49,8 @@ python app/main.py
 
 ### One-click сборка EXE (Windows)
 
+> 💡 "Двойной клик → EXE": просто открой `build/RunMe.bat`, и через пару минут готовый бинарь появится в `dist_TRANSCRIBATORAUD/`.
+
 Требуется установленный Python 3.11 x64 и доступ в интернет для скачивания ffmpeg.
 
 1. Двойной клик по `build/RunMe.bat` (или `powershell -File .\build\RunMe.ps1`).
