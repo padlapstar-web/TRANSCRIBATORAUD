@@ -1,29 +1,38 @@
+#Requires -Version 5.1
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
 Param(
   [string]$Python = "3.11",
   [switch]$Clean
 )
-$ErrorActionPreference = "Stop"
-$root = (Resolve-Path "$PSScriptRoot\..").Path
+
+$root = (Resolve-Path "$PSScriptRoot\..\").Path
 Set-Location $root
 
 if ($Clean) {
-  Remove-Item -Recurse -Force .venv, build\cache, dist_*, build\*.log -ErrorAction SilentlyContinue
+  Remove-Item -Recurse -Force .venv, "build\cache", dist_*, build\*.log -ErrorAction SilentlyContinue
 }
 
 if (!(Test-Path .\.venv)) {
-  & py -$Python -m venv .venv
+  if (Get-Command py -ErrorAction SilentlyContinue) {
+    & py -$Python -m venv .venv
+  } else {
+    & python -m venv .venv
+  }
 }
 & .\.venv\Scripts\Activate.ps1
+
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 pip install pyinstaller
 
-& powershell -NoProfile -ExecutionPolicy Bypass -File "./build/Ensure-FFmpeg.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\build\Ensure-FFmpeg.ps1"
 
 $ffdir = Join-Path $root "resources\ffmpeg"
-if (Test-Path $ffdir) {
-  $env:PATH = "$ffdir;$env:PATH"
-}
+if (Test-Path $ffdir) { $env:PATH = "$ffdir;$env:PATH" }
 
 if (!(Test-Path .\pyinstaller.spec)) {
   @"
@@ -50,10 +59,11 @@ New-Item -Force -ItemType Directory -Path $appdata | Out-Null
 @"
 device: auto
 compute_type: auto
-models_dir: "$($appdata.Replace('\','\\'))\\models"
+models_dir: "$(($appdata.Replace('\','\\')))\\models"
 "@ | Out-File -Encoding UTF8 (Join-Path $appdata "config.yaml")
 
 pyinstaller --clean pyinstaller.spec | Tee-Object -FilePath .\build\build.log
 
-Write-Host "`nГОТОВО: dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe"
-Write-Host "Запуск: dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe --help"
+Write-Host ""
+Write-Host "READY: dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe"
+Write-Host "Run:   dist_TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe --help"

@@ -48,6 +48,9 @@ python app/main.py
 ```
 
 ### One-click сборка EXE (Windows)
+Если Windows жалуется на исполнение скриптов, перед запуском можно разово выполнить:
+`Set-ExecutionPolicy Bypass -Scope Process -Force`
+
 
 > 💡 "Двойной клик → EXE": просто открой `build/RunMe.bat`, и через пару минут готовый бинарь появится в `dist_TRANSCRIBATORAUD/`.
 
