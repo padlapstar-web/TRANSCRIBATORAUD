@@ -18,18 +18,18 @@ TRANSCRIBATORAUD — офлайн-приложение для пакетной �
 TRANSCRIBATORAUD/
 ├── app/
 │   ├── main.py             # запуск GUI по умолчанию, CLI при наличии аргументов
-│   ├── cli.py              # парсер командной строки (заготовка)
+│   ├── cli.py              # полноценный CLI для пакетной транскрибации
 │   ├── ui/
 │   │   ├── main_window.py  # каркас основного окна
 │   │   └── dialogs.py      # вспомогательные диалоги (заготовка)
 │   └── core/
-│       ├── asr.py          # интерфейс работы с Whisper (заготовка)
-│       ├── exporter.py     # функции сохранения результатов (заготовка)
-│       ├── batch.py        # пакетная обработка (заготовка)
-│       ├── audio.py        # утилиты ffprobe (заготовка)
-│       ├── models.py       # поиск локальных моделей (заготовка)
-│       ├── config.py       # чтение/запись YAML-конфига (заготовка)
-│       └── logging.py      # настройка логирования (заготовка)
+│       ├── asr.py          # интеграция faster-whisper с таймкодами слов
+│       ├── exporter.py     # сохранение слов в JSONL/CSV/VTT/SRT/LRC
+│       ├── batch.py        # сканирование входов и параллельная обработка
+│       ├── audio.py        # утилиты ffprobe и фильтр форматов
+│       ├── models.py       # поиск локальных моделей
+│       ├── config.py       # YAML-конфиг последних настроек
+│       └── logging.py      # ротация логов по дням
 ├── resources/
 │   └── ffmpeg/
 │       └── .gitkeep        # место для ffmpeg и ffprobe
@@ -47,13 +47,30 @@ pip install -r requirements.txt
 python app/main.py
 ```
 
-По умолчанию запускается GUI-заготовка. Для CLI предусмотрен запуск:
+По умолчанию запускается GUI-заготовка. Для CLI доступна полноценная утилита:
 
 ```bash
-python app/main.py --help
+python app/cli.py --input ./samples --recursive --formats jsonl,csv,vtt \
+  --model small --device cuda --compute_type float16 --language ru --parallel 2
 ```
 
-(Реализация команд появится в следующих задачах.)
+Ключевые флаги CLI:
+
+- `--input` — файл, папка или маска (`*.wav`).
+- `--out` — папка для результатов (по умолчанию рядом с входом).
+- `--recursive` — рекурсивный поиск в каталогах.
+- `--formats` — перечисление форматов экспорта (`jsonl,csv,vtt,srt,lrc`).
+- `--model`, `--device`, `--compute_type`, `--language` — параметры ASR.
+- `--beam-size`, `--parallel` — управление качеством и параллельностью.
+- `--keep-punct/--no-keep-punct`, `--vad`, `--skip-existing` — дополнительные опции.
+
+Форматы вывода:
+
+- **JSONL** — одна строка = одно слово: `{"i":1,"start":0.512,"end":0.840,"word":"пример","prob":0.93}`.
+- **CSV** — заголовок `i,start,end,word,prob` и строки со значениями.
+- **WebVTT** — по одному слову на cue (`00:00:00.000 --> 00:00:00.500`).
+- **SRT** — одно слово на субтитр (`00:00:00,000 --> 00:00:00,500`).
+- **LRC** — enhanced LRC с метками `[mm:ss.xx]` и переносом строк до 5 секунд.
 
 ## PR-флоу
 

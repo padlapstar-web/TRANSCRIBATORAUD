@@ -1,20 +1,29 @@
 """Minimal placeholder for the future PySide6 GUI."""
 from __future__ import annotations
 
-try:
-    from PySide6.QtWidgets import QApplication, QLabel, QWidget
-except Exception:  # pragma: no cover - optional dependency during bootstrap
-    QApplication = None  # type: ignore[assignment]
-    QLabel = None  # type: ignore[assignment]
-    QWidget = None  # type: ignore[assignment]
+import importlib.util
+from typing import Optional, Tuple
+
+QtWidgets = "PySide6.QtWidgets"
+
+
+def _load_widgets() -> Optional[Tuple[type, type, type]]:
+    if importlib.util.find_spec(QtWidgets) is None:  # pragma: no cover - optional dependency
+        return None
+    from PySide6.QtWidgets import QApplication, QLabel, QWidget  # type: ignore
+
+    return QApplication, QLabel, QWidget
 
 
 def launch_gui() -> int:
     """Launch a minimal window or print a placeholder message."""
-    if QApplication is None:
+
+    widgets = _load_widgets()
+    if widgets is None:
         print("PySide6 is not available yet. GUI will be implemented later.")
         return 0
 
+    QApplication, QLabel, QWidget = widgets
     app = QApplication([])
     window = QWidget()
     window.setWindowTitle("TRANSCRIBATORAUD (stub)")
