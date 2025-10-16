@@ -10,6 +10,9 @@ from typing import Iterable, List, Optional, Tuple
 from app.core import models
 from app.core.logging import setup_logging
 
+# CTranslate2 does not expose a dedicated errors module; handle common failures explicitly.
+CT2_EXC = (RuntimeError, OSError, ValueError)
+
 _ROOT_LOGGER = setup_logging()
 _LOGGER = _ROOT_LOGGER.getChild("asr")
 _OOM_SIGNATURES: tuple[str, ...] = (
@@ -17,17 +20,6 @@ _OOM_SIGNATURES: tuple[str, ...] = (
     "failed to allocate memory",
     "cublas",
 )
-
-
-_ct_spec = importlib.util.find_spec("ctranslate2")
-if _ct_spec is not None:  # pragma: no branch - import guard
-    from ctranslate2 import errors as ct_errors  # type: ignore
-else:  # pragma: no cover - fallback for optional dependency
-    class _ErrorsModule:
-        class CTranslate2Error(RuntimeError):
-            """Fallback error type when ctranslate2 is unavailable."""
-
-    ct_errors = _ErrorsModule()  # type: ignore[assignment]
 
 
 _fw_spec = importlib.util.find_spec("faster_whisper")
@@ -171,7 +163,7 @@ def transcribe_to_words(
             vad_filter=vad,
         )
         return list(_iter_words(segments, keep_punct))
-    except (RuntimeError, ct_errors.CTranslate2Error) as error:  # pragma: no cover - hardware specific
+    except CT2_EXC as error:  # pragma: no cover - hardware specific
         if resolved_device.lower() != "cpu" and not _retried and _should_retry_on_cpu(error):
             _LOGGER.warning("CUDA OOM → fallback to CPU int8")
             return transcribe_to_words(

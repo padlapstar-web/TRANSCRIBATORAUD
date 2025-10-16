@@ -51,8 +51,7 @@ python app/main.py
 Если Windows жалуется на исполнение скриптов, перед запуском можно разово выполнить:
 `Set-ExecutionPolicy Bypass -Scope Process -Force`
 
-> Сборка выполняется на **python.org 3.12**. Anaconda/Miniconda не поддерживаются.
-> При первом запуске `build/RunMe.bat` при отсутствии python.org 3.12 скрипт установит его через winget.
+> Скрипт ищет установленный **python.org** интерпретатор: `py -3.12`, затем `py -3.11`, `py -3.10`, и только потом `python` из PATH. Дистрибутивы Anaconda/Miniconda не поддерживаются.
 
 
 > 💡 "Двойной клик → EXE": просто открой `build/RunMe.bat`, и через пару минут готовый бинарь появится в `dist/TRANSCRIBATORAUD/`.
@@ -63,8 +62,7 @@ python app/main.py
 2. Скрипт автоматически:
    - создаст и активирует виртуальное окружение `.venv`;
    - установит зависимости проекта и PyInstaller;
-   - скачает `ffmpeg.exe` и `ffprobe.exe` в `resources\ffmpeg` (файлы не попадают в git);
-   - сгенерирует `config.yaml` с настройками `device: auto`;
+   - скачает `ffmpeg.exe` и `ffprobe.exe` в `resources\ffmpeg` (файлы не попадают в git); 
    - соберёт `dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe`.
 3. Запусти собранное приложение:
    ```powershell

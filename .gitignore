@@ -16,6 +16,7 @@ __pycache__/
 /build/*.log
 *.egg-info/
 *.spec
+!build/TRANSCRIBATORAUD.spec
 
 # Application data
 /models/
