@@ -1,7 +1,6 @@
 """Batch processing utilities."""
 from __future__ import annotations
 
-import logging
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,8 +8,10 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence
 
 from app.core import audio, exporter
 from app.core.asr import Word, transcribe_to_words
+from app.core.logging import setup_logging
 
-_LOGGER = logging.getLogger(__name__)
+_ROOT_LOGGER = setup_logging()
+_LOGGER = _ROOT_LOGGER.getChild("batch")
 
 ProgressCallback = Callable[[Path, str], None]
 

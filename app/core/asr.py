@@ -2,15 +2,16 @@
 from __future__ import annotations
 
 import importlib.util
-import logging
 import string
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
 from app.core import models
+from app.core.logging import setup_logging
 
-_LOGGER = logging.getLogger(__name__)
+_ROOT_LOGGER = setup_logging()
+_LOGGER = _ROOT_LOGGER.getChild("asr")
 _OOM_SIGNATURES: tuple[str, ...] = (
     "cuda out of memory",
     "failed to allocate memory",

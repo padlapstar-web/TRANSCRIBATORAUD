@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -10,8 +9,10 @@ from tqdm import tqdm
 
 from app.core import exporter
 from app.core.batch import BatchOptions, discover_inputs, process_batch
+from app.core.logging import setup_logging
 
-_LOGGER = logging.getLogger(__name__)
+_ROOT_LOGGER = setup_logging()
+_LOGGER = _ROOT_LOGGER.getChild("cli")
 
 
 def build_parser() -> argparse.ArgumentParser:
