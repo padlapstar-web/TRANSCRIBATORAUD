@@ -5,8 +5,14 @@ $ErrorActionPreference = "Stop"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
 if (-not $OutDir) {
-  $OutDir = (Resolve-Path (Join-Path $PSScriptRoot "..\resources\ffmpeg")).Path
+  $default = Join-Path $PSScriptRoot "..\resources\ffmpeg"
+  if (Test-Path $default) {
+    $OutDir = (Resolve-Path $default).Path
+  } else {
+    $OutDir = [System.IO.Path]::GetFullPath($default)
+  }
 }
+
 New-Item -Force -ItemType Directory -Path $OutDir | Out-Null
 
 $ff = Join-Path $OutDir "ffmpeg.exe"

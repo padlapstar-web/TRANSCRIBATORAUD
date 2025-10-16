@@ -5,28 +5,41 @@ Param(
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new() } catch {}
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
+function Is-CondaPath {
+  param([string]$Path)
+  if (-not $Path) { return $false }
+  return ($Path -match '(?i)(anaconda|miniconda)')
+}
+
+function Get-Lines {
+  param($Value)
+  if ($null -eq $Value) { return @() }
+  if ($Value -is [array]) { return $Value }
+  return ($Value -split "`r?`n")
+}
+
 function Find-Python312 {
-  $cands = @(
+  $candidates = @()
+  $direct = @(
     "$env:LocalAppData\Programs\Python\Python312\python.exe",
     "C:\\Program Files\\Python312\\python.exe",
     "C:\\Program Files (x86)\\Python312\\python.exe"
   ) | Where-Object { Test-Path $_ }
+  $candidates += $direct
 
   if (Get-Command py -ErrorAction SilentlyContinue) {
-    $list = & py -0p 2>$null
-    if ($list) {
-      foreach ($line in ($list -split "`r?`n")) {
-        if ($line -match ' -3\.12 ') {
-          $parts = $line -split '\s+', 3
-          if ($parts.Length -ge 3) {
-            $candidate = $parts[2]
-            if ($candidate -and ($candidate -notmatch 'anaconda|miniconda')) {
-              $cands += $candidate
-              break
-            }
+    $launcher = & py -0p 2>$null
+    foreach ($line in (Get-Lines $launcher)) {
+      if ($line -match ' -3\.12 ') {
+        $parts = $line -split '\s+', 3
+        if ($parts.Length -ge 3) {
+          $candidate = $parts[2]
+          if ($candidate -and -not (Is-CondaPath $candidate)) {
+            $candidates += $candidate
+            break
           }
         }
       }
@@ -36,18 +49,18 @@ function Find-Python312 {
   $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
   if ($pythonCmd) {
     $path = $pythonCmd.Source
-    if ($path -and ($path -notmatch 'anaconda|miniconda')) {
+    if ($path -and -not (Is-CondaPath $path)) {
       try {
         $ver = (& $path -c "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null).Trim()
         if ($ver -eq "3.12") {
-          $cands += $path
+          $candidates += $path
         }
       } catch {}
     }
   }
 
-  $cands = $cands | Where-Object { $_ } | Select-Object -Unique | Where-Object { $_ -notmatch 'anaconda|miniconda' }
-  if ($cands.Count -gt 0) { return $cands[0] }
+  $filtered = @($candidates | Where-Object { $_ } | Select-Object -Unique | Where-Object { -not (Is-CondaPath $_) })
+  if ($filtered.Length -gt 0) { return $filtered[0] }
   return $null
 }
 
@@ -72,7 +85,7 @@ $venvHome = Join-Path $root ".venv"
 if (Test-Path (Join-Path $venvHome "pyvenv.cfg")) {
   try {
     $cfg = Get-Content (Join-Path $venvHome "pyvenv.cfg") -Encoding UTF8
-    if ($cfg -match 'anaconda|miniconda') {
+    if ($cfg -match '(?i)(anaconda|miniconda)') {
       Remove-Item -Recurse -Force $venvHome -ErrorAction SilentlyContinue
     }
   } catch {}
@@ -126,10 +139,11 @@ coll=COLLECT(exe,a.binaries,a.zipfiles,a.datas,name="TRANSCRIBATORAUD")
 
 $appdata = Join-Path $env:APPDATA "TRANSCRIBATORAUD"
 New-Item -Force -ItemType Directory -Path $appdata | Out-Null
+$escapedAppData = $appdata -replace '\\', '\\\\'
 @"
 device: auto
 compute_type: auto
-models_dir: "$([System.Text.RegularExpressions.Regex]::Escape($appdata))\\models"
+models_dir: "$escapedAppData\\models"
 "@ | Out-File -Encoding UTF8 (Join-Path $appdata "config.yaml")
 
 python -m PyInstaller --noconfirm --clean --workpath ".\build\pyinstaller" --distpath ".\dist" pyinstaller.spec | Tee-Object -FilePath .\build\build.log
