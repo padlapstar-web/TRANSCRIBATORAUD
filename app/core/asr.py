@@ -10,8 +10,8 @@ from typing import Iterable, List, Optional, Tuple
 from app.core import models
 from app.core.logging import setup_logging
 
-# CTranslate2 does not expose a dedicated errors module; handle common failures explicitly.
-CT2_EXC = (RuntimeError, OSError, ValueError)
+# CTranslate2 does not expose a dedicated errors module; catch the common runtime failures explicitly.
+CT2_EXC = (RuntimeError, OSError, ValueError, Exception)
 
 _ROOT_LOGGER = setup_logging()
 _LOGGER = _ROOT_LOGGER.getChild("asr")

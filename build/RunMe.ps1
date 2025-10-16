@@ -5,6 +5,10 @@ param(
 )
 
 Set-StrictMode -Version Latest
+$IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($IsAdmin) {
+    Write-Warning "Running as Administrator is not required and may mask build issues. Use a regular PowerShell session."
+}
 $ErrorActionPreference = "Stop"
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
@@ -95,10 +99,16 @@ if (!(Test-Path (Join-Path $ffOutDir "ffmpeg.exe")) -or !(Test-Path (Join-Path $
 $env:PATH = "$ffOutDir;$env:PATH"
 
 $buildLog = Join-Path $root "build\build.log"
-& $venvPython -m PyInstaller -y (Join-Path $root "build\TRANSCRIBATORAUD.spec") 2>&1 |
-    Tee-Object -FilePath $buildLog
-if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller failed. See build\\build.log"
+$buildErr = Join-Path $root "build\build.err"
+$spec = Join-Path $root "build\TRANSCRIBATORAUD.spec"
+$proc = Start-Process -FilePath $venvPython -ArgumentList @("-m", "PyInstaller", "-y", $spec) -NoNewWindow -Wait -PassThru -RedirectStandardOutput $buildLog -RedirectStandardError $buildErr
+if ($proc.ExitCode -ne 0) {
+    Write-Error "PyInstaller failed (code $($proc.ExitCode)). See build\\build.log"
+    exit $proc.ExitCode
+}
+if (Test-Path $buildErr) {
+    Add-Content -Path $buildLog -Value (Get-Content $buildErr)
+    Remove-Item $buildErr -ErrorAction SilentlyContinue
 }
 
 $exe = Join-Path $root "dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe"
