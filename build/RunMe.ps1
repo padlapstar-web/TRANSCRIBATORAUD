@@ -9,28 +9,27 @@ $ErrorActionPreference = "Stop"
 try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new() } catch {}
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
+function Get-PyLauncher { if (Get-Command py -ErrorAction SilentlyContinue) { return "py" } return $null }
+
 function Select-PythonVersion {
   param([string]$Preferred = "auto")
-  if ($Preferred -ne "auto") { return $Preferred }
   $order = @("3.12","3.11","3.10")
-  $found = @()
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    $list = & py -0p 2>$null
+  if ($Preferred -ne "auto") { return $Preferred }
+
+  $py = Get-PyLauncher
+  if ($py) {
+    $list = & $py -0p 2>$null
     foreach ($v in $order) {
-      if ($list -match [Regex]::Escape(" -$v ")) { $found += $v }
+      if ($list -match " -$([Regex]::Escape($v)) ") { return $v }
     }
-  } elseif (Get-Command python -ErrorAction SilentlyContinue) {
+  }
+  if (Get-Command python -ErrorAction SilentlyContinue) {
     try {
-      $v = (& python - <<'PY'
-import sys
-print(f"{sys.version_info.major}.{sys.version_info.minor}")
-PY
-      ).Trim()
-      if ($order -contains $v) { $found += $v }
+      $v = (& python -c "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')" ).Trim()
+      if ($order -contains $v) { return $v }
     } catch {}
   }
-  if ($found.Count -gt 0) { return $found[0] }
-  throw "Python 3.12/3.11/3.10 не найден. Установи один из них и перезапусти."
+  throw "Python 3.12/3.11/3.10 не найден. Установи любой из них и перезапусти."
 }
 
 $root = (Resolve-Path "$PSScriptRoot\..\").Path
@@ -44,15 +43,9 @@ $ver = Select-PythonVersion -Preferred $Python
 Write-Host ("Using Python " + $ver)
 
 if (!(Test-Path .\.venv)) {
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    & py -$ver -m venv .venv
-  } else {
-    & python -m venv .venv
-  }
+  if (Get-PyLauncher) { & py -$ver -m venv .venv } else { & python -m venv .venv }
 }
-if (!(Test-Path .\.venv\Scripts\Activate.ps1)) {
-  throw "Не найден .\\.venv\\Scripts\\Activate.ps1"
-}
+if (!(Test-Path .\.venv\Scripts\Activate.ps1)) { throw "Не найден .\\.venv\\Scripts\\Activate.ps1" }
 & .\.venv\Scripts\Activate.ps1
 
 python -m pip install --upgrade pip
