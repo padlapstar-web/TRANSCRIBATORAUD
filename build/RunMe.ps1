@@ -17,11 +17,18 @@ function Find-Python312 {
 
   if (Get-Command py -ErrorAction SilentlyContinue) {
     $list = & py -0p 2>$null
-    $match = ($list | Select-String " -3\.12 ").Line
-    if ($match) {
-      $parts = $match -split '\s+',3
-      if ($parts.Length -ge 3 -and ($parts[2] -notmatch 'anaconda|miniconda')) {
-        $cands += $parts[2]
+    if ($list) {
+      foreach ($line in ($list -split "`r?`n")) {
+        if ($line -match ' -3\.12 ') {
+          $parts = $line -split '\s+', 3
+          if ($parts.Length -ge 3) {
+            $candidate = $parts[2]
+            if ($candidate -and ($candidate -notmatch 'anaconda|miniconda')) {
+              $cands += $candidate
+              break
+            }
+          }
+        }
       }
     }
   }
