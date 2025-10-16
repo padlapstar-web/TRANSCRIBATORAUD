@@ -71,10 +71,10 @@ function Find-PythonExe {
   $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
   if ($pythonCmd) { $candidates += $pythonCmd.Source }
 
-  $candidates = $candidates | Where-Object { $_ } | Select-Object -Unique
+  $candidates = $candidates | Where-Object { $_ } | Select-Object -Unique | Where-Object { $_ -notmatch 'anaconda|miniconda' }
   if ($candidates.Count -gt 0) { return $candidates[0] }
 
-  throw "Python 3.12/3.11/3.10 not found. Install one of them and re-run." 
+  throw "Python 3.12/3.11/3.10 not found. Install one of them and re-run."
 }
 
 $root = (Resolve-Path "$PSScriptRoot\..\").Path
@@ -84,7 +84,18 @@ if ($Clean.IsPresent) {
   Remove-Item -Recurse -Force .venv, "build\cache", dist_*, build\*.log -ErrorAction SilentlyContinue
 }
 
-$pyExe = Find-PythonExe -Order @("3.12","3.11","3.10") -Preferred $Python
+$order = @("3.12","3.11","3.10")
+try {
+  $pyExe = Find-PythonExe -Order $order -Preferred $Python
+} catch {
+  Write-Host "Installing python.org 3.12 via winget..."
+  if (Get-Command winget -ErrorAction SilentlyContinue) {
+    winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements --silent --scope user
+    $pyExe = Find-PythonExe -Order $order -Preferred "3.12"
+  } else {
+    throw "winget not available; install Python 3.12 from python.org and re-run"
+  }
+}
 Write-Host ("Using interpreter: " + $pyExe)
 
 if (!(Test-Path .\.venv)) { & "$pyExe" -m venv .venv }
