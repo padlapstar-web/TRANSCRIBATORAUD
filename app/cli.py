@@ -104,7 +104,15 @@ def run_cli(args: Iterable[str]) -> int:
     namespace = parser.parse_args(list(args))
 
     source = Path(namespace.input)
-    output_dir = Path(namespace.output) if namespace.output else (source.parent if source.is_file() else Path.cwd())
+    if namespace.output:
+        output_dir = Path(namespace.output)
+    elif source.is_file():
+        output_dir = source.parent
+    elif source.is_dir():
+        output_dir = source
+    else:
+        parent = source.parent
+        output_dir = parent if str(parent) not in {"", "."} else Path.cwd()
 
     try:
         formats = _parse_formats(namespace.formats)
