@@ -5,25 +5,22 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "transcribatoraud"
 version = "0.1.0"
-description = "Service for audio transcription"
-authors = [{ name = "Transcribator Team", email = "dev@example.com" }]
+description = "Offline batch audio transcription toolkit"
+authors = [{ name = "Transcribator AUD Team" }]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "fastapi>=0.110,<0.112",
-    "uvicorn[standard]>=0.29,<0.31",
-    "pydantic>=2.5,<3",
-    "python-multipart>=0.0.9",
-    "faster-whisper>=0.10.0",
+    "faster-whisper",
+    "PySide6",
+    "soundfile",
+    "tqdm",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "httpx>=0.27",
 ]
 
-[tool.pytest.ini_options]
-minversion = "8.0"
-addopts = "-q"
-testpaths = ["tests"]
+[tool.setuptools.packages.find]
+where = ["app"]

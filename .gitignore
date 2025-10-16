@@ -1,12 +1,35 @@
+# Python artifacts
 __pycache__/
 *.py[cod]
-*.egg-info/
-.env
+*$py.class
+
+# Virtual environments
 .venv/
+.env/
 .env.*
+
+# Packaging / build outputs
+build/
+dist/
+*.egg-info/
+*.spec
+
+# Application data
+/models/
+/logs/
+/output/
+
+# Tools / IDE
+.pytest_cache/
+.ipynb_checkpoints/
 .DS_Store
 .idea/
 .vscode/
-.pytest_cache/
-dist/
-build/
+
+# PyInstaller bundles
+*.exe
+*.dll
+*.pyd
+
+# Misc
+Thumbs.db
