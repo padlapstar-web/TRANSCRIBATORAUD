@@ -98,17 +98,36 @@ if (!(Test-Path (Join-Path $ffOutDir "ffmpeg.exe")) -or !(Test-Path (Join-Path $
 }
 $env:PATH = "$ffOutDir;$env:PATH"
 
-$buildLog = Join-Path $root "build\build.log"
-$buildErr = Join-Path $root "build\build.err"
 $spec = Join-Path $root "build\TRANSCRIBATORAUD.spec"
-$proc = Start-Process -FilePath $venvPython -ArgumentList @("-m", "PyInstaller", "-y", $spec) -NoNewWindow -Wait -PassThru -RedirectStandardOutput $buildLog -RedirectStandardError $buildErr
+$logDir = Join-Path $root "build"
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$pyiLog = Join-Path $logDir "pyinstaller-admin.log"
+
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = $venvPython
+$psi.ArgumentList.Add("-m")
+$psi.ArgumentList.Add("PyInstaller")
+$psi.ArgumentList.Add("--noconfirm")
+$psi.ArgumentList.Add("--clean")
+$psi.ArgumentList.Add($spec)
+$psi.WorkingDirectory = $root
+$psi.UseShellExecute = $false
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+$psi.Environment["PYTHONUTF8"] = "1"
+
+$proc = [System.Diagnostics.Process]::Start($psi)
+$stdOut = $proc.StandardOutput.ReadToEnd()
+$stdErr = $proc.StandardError.ReadToEnd()
+$proc.WaitForExit()
+Set-Content -Path $pyiLog -Value ($stdOut + "`r`n" + $stdErr) -Encoding UTF8
 if ($proc.ExitCode -ne 0) {
-    Write-Error "PyInstaller failed (code $($proc.ExitCode)). See build\\build.log"
+    Write-Host "---- PyInstaller LOG (tail) ----"
+    if (Test-Path $pyiLog) {
+        Get-Content $pyiLog -Tail 120
+    }
+    Write-Error "PyInstaller failed (code $($proc.ExitCode)). See $pyiLog"
     exit $proc.ExitCode
-}
-if (Test-Path $buildErr) {
-    Add-Content -Path $buildLog -Value (Get-Content $buildErr)
-    Remove-Item $buildErr -ErrorAction SilentlyContinue
 }
 
 $exe = Join-Path $root "dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe"
