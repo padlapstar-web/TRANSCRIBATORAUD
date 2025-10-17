@@ -6,7 +6,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path.cwd()
 ENTRY_SCRIPT = PROJECT_ROOT / "app" / "main.py"
 if not ENTRY_SCRIPT.exists():
     raise FileNotFoundError(f"Entry script not found: {ENTRY_SCRIPT}")
