@@ -1,0 +1,40 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+/.venv/
+.env/
+.env.*
+
+# Packaging / build outputs
+/dist/
+/dist_*/
+/build/cache/
+/build/*.log
+*.egg-info/
+*.spec
+!build/TRANSCRIBATORAUD.spec
+
+# Application data
+/models/
+/logs/
+/output/
+
+# Tools / IDE
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+.idea/
+.vscode/
+
+# PyInstaller bundles
+*.exe
+*.dll
+*.pyd
+/resources/ffmpeg/*.exe
+
+# Misc
+Thumbs.db
