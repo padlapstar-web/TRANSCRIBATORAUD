@@ -7,22 +7,29 @@ param(
 Set-StrictMode -Version Latest
 $IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if ($IsAdmin) {
-    Write-Warning "Running as Administrator is not required and may mask build issues. Use a regular PowerShell session."
+    Write-Warning "Running as Administrator is not required and may hide build issues. Use a regular PowerShell session."
 }
 $ErrorActionPreference = "Stop"
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
-function Resolve-PythonInterpreter {
-    param([string]$Version)
+if ($PyPreferred -ne "3.12") {
+    Write-Warning "Only python.org 3.12 is supported for packaging. Overriding to 3.12."
+    $PyPreferred = "3.12"
+}
 
-    function Resolve-CandidatePath {
-        param([string]$Candidate)
-        if ([string]::IsNullOrWhiteSpace($Candidate)) { return $null }
-        if ($Candidate -match '(?i)(anaconda|miniconda)') { return $null }
-        if (Test-Path $Candidate) { return (Resolve-Path $Candidate).Path }
-        return $null
+function Resolve-CandidatePath {
+    param([string]$Candidate)
+    if ([string]::IsNullOrWhiteSpace($Candidate)) { return $null }
+    if ($Candidate -match '(?i)(anaconda|miniconda)') { return $null }
+    if (Test-Path $Candidate) {
+        return (Resolve-Path $Candidate).Path
     }
+    return $null
+}
+
+function Resolve-Python {
+    param([string]$Version)
 
     $candidates = @()
 
@@ -38,8 +45,7 @@ function Resolve-PythonInterpreter {
 
     $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
     if ($pyLauncher) {
-        $pyArgs = @("-$Version", "-c", "import sys; print(sys.executable)")
-        $result = (& $pyLauncher.Path @pyArgs 2>$null)
+        $result = (& $pyLauncher.Path "-$Version" "-c" "import sys; print(sys.executable)" 2>$null)
         if ($LASTEXITCODE -eq 0) {
             $text = if ($result -is [Array]) { $result[-1] } else { $result }
             $resolved = Resolve-CandidatePath -Candidate ($text.Trim())
@@ -47,15 +53,17 @@ function Resolve-PythonInterpreter {
         }
     }
 
-    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($pythonCmd -and ($Version -eq "3.12")) {
-        try {
-            $reported = (& $pythonCmd.Path -c "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null).Trim()
-            if ($reported -eq "3.12") {
-                $resolved = Resolve-CandidatePath -Candidate $pythonCmd.Path
-                if ($resolved) { $candidates += $resolved }
-            }
-        } catch {}
+    if ($Version -eq "3.12") {
+        $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+        if ($pythonCmd) {
+            try {
+                $reported = (& $pythonCmd.Path -c "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null).Trim()
+                if ($reported -eq "3.12") {
+                    $resolved = Resolve-CandidatePath -Candidate $pythonCmd.Path
+                    if ($resolved) { $candidates += $resolved }
+                }
+            } catch {}
+        }
     }
 
     $unique = @()
@@ -76,7 +84,7 @@ if ($Clean.IsPresent) {
     Remove-Item -Recurse -Force .venv, "build\pyinstaller", dist, build\*.log, build\cache -ErrorAction SilentlyContinue
 }
 
-$pythonExe = Resolve-PythonInterpreter -Version $PyPreferred
+$pythonExe = Resolve-Python -Version $PyPreferred
 Write-Host ("Using interpreter: " + $pythonExe)
 
 if (Test-Path .\.venv) {
@@ -98,9 +106,11 @@ if (!(Test-Path (Join-Path $ffOutDir "ffmpeg.exe")) -or !(Test-Path (Join-Path $
 }
 $env:PATH = "$ffOutDir;$env:PATH"
 
-$spec = Join-Path $root "build\TRANSCRIBATORAUD.spec"
+# --- PyInstaller: resilient under admin PowerShell ---
+$spec   = Join-Path $root "build\TRANSCRIBATORAUD.spec"
 $logDir = Join-Path $root "build"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
 $pyiOut = Join-Path $logDir "pyinstaller-admin.out.log"
 $pyiErr = Join-Path $logDir "pyinstaller-admin.err.log"
 $pyiLog = Join-Path $logDir "pyinstaller-admin.log"
@@ -119,18 +129,19 @@ Get-Content $pyiOut, $pyiErr -ErrorAction SilentlyContinue | Set-Content -Encodi
 if ($proc.ExitCode -ne 0) {
     Write-Host "---- PyInstaller LOG (tail) ----"
     if (Test-Path $pyiLog) {
-        Get-Content $pyiLog -Tail 120
+        Get-Content $pyiLog -Tail 160
     }
     Write-Error "PyInstaller failed (code $($proc.ExitCode)). See $pyiLog"
     exit $proc.ExitCode
 }
 
-$exeA = Join-Path $root "dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe"
-$exeB = Join-Path $root "dist\TRANSCRIBATORAUD.exe"
-if (Test-Path $exeA) {
-    $exe = $exeA
-} elseif (Test-Path $exeB) {
-    $exe = $exeB
+$exe = $null
+$candidateA = Join-Path $root "dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe"
+$candidateB = Join-Path $root "dist\TRANSCRIBATORAUD.exe"
+if (Test-Path $candidateA) {
+    $exe = $candidateA
+} elseif (Test-Path $candidateB) {
+    $exe = $candidateB
 } else {
     $hit = Get-ChildItem -Recurse -Path (Join-Path $root "dist") -Filter "TRANSCRIBATORAUD.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($hit) {
