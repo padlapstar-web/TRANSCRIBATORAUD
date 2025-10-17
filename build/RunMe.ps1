@@ -101,26 +101,21 @@ $env:PATH = "$ffOutDir;$env:PATH"
 $spec = Join-Path $root "build\TRANSCRIBATORAUD.spec"
 $logDir = Join-Path $root "build"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$pyiOut = Join-Path $logDir "pyinstaller-admin.out.log"
+$pyiErr = Join-Path $logDir "pyinstaller-admin.err.log"
 $pyiLog = Join-Path $logDir "pyinstaller-admin.log"
+Remove-Item $pyiOut, $pyiErr, $pyiLog -ErrorAction SilentlyContinue
 
-$psi = New-Object System.Diagnostics.ProcessStartInfo
-$psi.FileName = $venvPython
-$psi.ArgumentList.Add("-m")
-$psi.ArgumentList.Add("PyInstaller")
-$psi.ArgumentList.Add("--noconfirm")
-$psi.ArgumentList.Add("--clean")
-$psi.ArgumentList.Add($spec)
-$psi.WorkingDirectory = $root
-$psi.UseShellExecute = $false
-$psi.RedirectStandardOutput = $true
-$psi.RedirectStandardError = $true
-$psi.Environment["PYTHONUTF8"] = "1"
+$args = @("-m", "PyInstaller", "--noconfirm", "--clean", "--log-level", "INFO", $spec)
+$proc = Start-Process -FilePath $venvPython `
+    -ArgumentList $args `
+    -WorkingDirectory $root `
+    -NoNewWindow -PassThru -Wait `
+    -RedirectStandardOutput $pyiOut `
+    -RedirectStandardError $pyiErr
 
-$proc = [System.Diagnostics.Process]::Start($psi)
-$stdOut = $proc.StandardOutput.ReadToEnd()
-$stdErr = $proc.StandardError.ReadToEnd()
-$proc.WaitForExit()
-Set-Content -Path $pyiLog -Value ($stdOut + "`r`n" + $stdErr) -Encoding UTF8
+Get-Content $pyiOut, $pyiErr -ErrorAction SilentlyContinue | Set-Content -Encoding UTF8 $pyiLog
+
 if ($proc.ExitCode -ne 0) {
     Write-Host "---- PyInstaller LOG (tail) ----"
     if (Test-Path $pyiLog) {
@@ -130,10 +125,21 @@ if ($proc.ExitCode -ne 0) {
     exit $proc.ExitCode
 }
 
-$exe = Join-Path $root "dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe"
-if (!(Test-Path $exe)) {
-    throw "EXE not found after build: $exe"
+$exeA = Join-Path $root "dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe"
+$exeB = Join-Path $root "dist\TRANSCRIBATORAUD.exe"
+if (Test-Path $exeA) {
+    $exe = $exeA
+} elseif (Test-Path $exeB) {
+    $exe = $exeB
+} else {
+    $hit = Get-ChildItem -Recurse -Path (Join-Path $root "dist") -Filter "TRANSCRIBATORAUD.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($hit) {
+        $exe = $hit.FullName
+    } else {
+        Write-Error "EXE not found after build"
+        exit 1
+    }
 }
 
-Write-Host "READY: $exe"
+Write-Host "`nREADY: $exe"
 Write-Host "Run:   `"$exe`" --help"
