@@ -5,11 +5,30 @@ import logging
 import os
 import platform
 import shutil
+import time
+from typing import Dict
 
 import ctranslate2 as ct2
+import requests
 from faster_whisper import __version__ as FW_VERSION
 import huggingface_hub
 import tokenizers
+
+
+def check_hf_cdn() -> Dict[str, str]:
+    urls = [
+        "https://huggingface.co",
+        "https://cdn-lfs.huggingface.co",
+    ]
+    results: Dict[str, str] = {}
+    for url in urls:
+        start = time.time()
+        try:
+            response = requests.head(url, timeout=5)
+            results[url] = f"{response.status_code} in {time.time() - start:.2f}s"
+        except Exception as exc:  # pragma: no cover - network dependent
+            results[url] = f"ERR: {exc}"
+    return results
 
 
 def dump_runtime_info() -> None:
@@ -34,3 +53,7 @@ def dump_runtime_info() -> None:
     logger = logging.getLogger(__name__)
     for key, value in info.items():
         logger.info("[diag] %s: %s", key, value)
+
+    cdn_results = check_hf_cdn()
+    for url, status in cdn_results.items():
+        logger.info("[diag] hf_cdn %s: %s", url, status)

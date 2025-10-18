@@ -46,7 +46,7 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-exe = EXE(
+exe_gui = EXE(
     pyz,
     a.scripts,
     [],
@@ -62,8 +62,25 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+exe_console = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name="TRANSCRIBATORAUD_console",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=True,
+    disable_windowed_traceback=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
 coll = COLLECT(
-    exe,
+    exe_gui,
+    exe_console,
     a.binaries,
     a.zipfiles,
     a.datas,

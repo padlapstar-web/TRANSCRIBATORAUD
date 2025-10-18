@@ -1,30 +1,23 @@
-"""Standalone diagnostics entry point."""
-from __future__ import annotations
-
 import argparse
 import logging
-import os
-
 from app.core.logging_setup import setup_logging
-from app.core.model_prefetch import ensure_local_model
+from app.core.model_prefetch import prefetch_model
+from app.core.models import resolve_repo_id
 from app.diagnostics.runtime_info import dump_runtime_info
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Diagnostics for TRANSCRIBATORAUD")
-    parser.add_argument("--model", default="small", help="Model name or local path")
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default="small")
     args = parser.parse_args()
 
-    log_file = setup_logging(debug=True)
-    logging.getLogger(__name__).info("Diagnostics log file: %s", log_file)
+    setup_logging(True)
     dump_runtime_info()
 
-    models_root = os.path.join(os.getenv("LOCALAPPDATA", os.path.expanduser("~")), "TranscribatorAud", "models")
-    local_model = ensure_local_model(args.model, models_root)
-    logging.getLogger(__name__).info("Model cached at %s", local_model)
-    logging.getLogger(__name__).info("Diagnostics completed")
-    return 0
+    repo_id = resolve_repo_id(args.model)
+    local_path = prefetch_model(repo_id)
+    logging.getLogger(__name__).info("Diagnostics complete. Model cached at %s", local_path)
 
 
-if __name__ == "__main__":  # pragma: no cover - manual execution
-    raise SystemExit(main())
+if __name__ == "__main__":
+    main()

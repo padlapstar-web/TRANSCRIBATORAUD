@@ -4,3 +4,4 @@ PySide6==6.10.0
 soundfile
 tqdm
 pyyaml
+requests

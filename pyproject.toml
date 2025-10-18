@@ -15,6 +15,7 @@ dependencies = [
     "soundfile",
     "tqdm",
     "pyyaml",
+    "requests",
 ]
 
 [project.optional-dependencies]

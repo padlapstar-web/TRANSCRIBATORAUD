@@ -4,16 +4,18 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 from app.core.batch import discover_inputs
 from app.core.ffmpeg import find_ffmpeg
+from app.core.models import resolve_repo_id
 from app.core.worker import JobConfig, TranscribeWorker
+from app.diagnostics.runtime_info import check_hf_cdn
 
 try:  # pragma: no cover - optional dependency at runtime
     from PySide6 import QtCore, QtGui, QtWidgets
-    from PySide6.QtGui import QDesktopServices
     from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
 except ImportError:  # pragma: no cover - executed when PySide6 is not installed
     QtCore = QtGui = QtWidgets = QDesktopServices = QUrl = None  # type: ignore[misc,assignment]
 
@@ -27,6 +29,7 @@ if QtWidgets is None or QtCore is None or QtGui is None:  # pragma: no cover
 
     def launch_gui(argv: Optional[Sequence[str]] = None) -> int:
         """Fallback when PySide6 is unavailable."""
+
         print(
             "PySide6 не найден. Установите зависимости (pip install -r requirements.txt) "
             "или используйте CLI: python app/cli.py ...",
@@ -37,23 +40,44 @@ if QtWidgets is None or QtCore is None or QtGui is None:  # pragma: no cover
 
 else:
 
+    class ModelPrefetchThread(QtCore.QThread):
+        finished = QtCore.Signal(bool, str)
+
+        def __init__(self, model_selector: str, parent: Optional[QtCore.QObject] = None) -> None:
+            super().__init__(parent)
+            self._model_selector = model_selector
+
+        def run(self) -> None:  # type: ignore[override]
+            from app.core.model_prefetch import prefetch_model
+
+            try:
+                repo_id = resolve_repo_id(self._model_selector)
+                local_path = prefetch_model(repo_id)
+                self.finished.emit(True, str(local_path))
+            except Exception as exc:  # pragma: no cover - network/filesystem issues
+                self.finished.emit(False, str(exc))
+
+
     class MainWindow(QtWidgets.QMainWindow):
         """Main GUI window for TRANSCRIBATORAUD."""
 
         def __init__(self) -> None:
             super().__init__()
             self.setWindowTitle("TRANSCRIBATORAUD")
-            self.resize(900, 640)
+            self.resize(920, 680)
 
             self._worker: Optional[TranscribeWorker] = None
+            self._prefetch_thread: Optional[ModelPrefetchThread] = None
             self._ffmpeg_checked = False
             self._ffmpeg_path: Optional[Path] = None
             self._worker_had_errors = False
             self._log_file_path: Optional[Path] = None
             self._open_logs_action: Optional[QtGui.QAction] = None
+            self._cdn_checked = False
 
             self._build_ui()
             self._ensure_output_dir()
+            self.statusBar().showMessage("Готово к запуску")
 
         def _build_ui(self) -> None:
             central = QtWidgets.QWidget(self)
@@ -80,11 +104,16 @@ else:
             for value in ["tiny", "base", "small", "medium", "large"]:
                 self.model_combo.addItem(value)
             self.model_combo.setCurrentText("small")
-            form_layout.addRow("Модель:", self.model_combo)
+            self.prefetch_button = QtWidgets.QPushButton("Скачать модель сейчас")
+            model_row = QtWidgets.QHBoxLayout()
+            model_row.addWidget(self.model_combo)
+            model_row.addWidget(self.prefetch_button)
+            form_layout.addRow("Модель:", model_row)
 
             self.device_combo = QtWidgets.QComboBox()
-            for value in ["cpu", "cuda"]:
+            for value in ["cpu", "cuda", "auto"]:
                 self.device_combo.addItem(value)
+            self.device_combo.setCurrentText("auto")
             form_layout.addRow("Устройство:", self.device_combo)
 
             self.compute_combo = QtWidgets.QComboBox()
@@ -98,8 +127,22 @@ else:
                 self.language_combo.addItem(value)
             form_layout.addRow("Язык:", self.language_combo)
 
+            # Local model override
+            self.local_model_checkbox = QtWidgets.QCheckBox("Использовать локальную модель (без загрузки)")
+            form_layout.addRow("", self.local_model_checkbox)
+
+            self.local_model_edit = QtWidgets.QLineEdit()
+            self.local_model_edit.setPlaceholderText("Каталог модели (model.bin*)")
+            self.local_model_browse = QtWidgets.QPushButton("Browse…")
+            local_row = QtWidgets.QHBoxLayout()
+            local_row.addWidget(self.local_model_edit)
+            local_row.addWidget(self.local_model_browse)
+            form_layout.addRow("Папка модели:", local_row)
+            self.local_model_edit.setEnabled(False)
+            self.local_model_browse.setEnabled(False)
+
             # Output formats
-            self.format_checkboxes: Dict[str, QtWidgets.QCheckBox] = {}
+            self.format_checkboxes: dict[str, QtWidgets.QCheckBox] = {}
             formats_layout = QtWidgets.QHBoxLayout()
             for fmt in ["jsonl", "csv", "vtt", "srt"]:
                 checkbox = QtWidgets.QCheckBox(fmt.upper())
@@ -135,9 +178,13 @@ else:
                 self.browse_input_button,
                 self.recursive_checkbox,
                 self.model_combo,
+                self.prefetch_button,
                 self.device_combo,
                 self.compute_combo,
                 self.language_combo,
+                self.local_model_checkbox,
+                self.local_model_edit,
+                self.local_model_browse,
                 self.output_edit,
                 self.output_browse_button,
                 *self.format_checkboxes.values(),
@@ -147,6 +194,9 @@ else:
             self.browse_input_button.clicked.connect(self._choose_input)
             self.output_browse_button.clicked.connect(self._choose_output)
             self.run_button.clicked.connect(self._start_transcription)
+            self.prefetch_button.clicked.connect(self._prefetch_model)
+            self.local_model_checkbox.toggled.connect(self._toggle_local_model_mode)
+            self.local_model_browse.clicked.connect(self._choose_local_model_dir)
 
             if hasattr(self, "menuBar"):
                 menu_bar = self.menuBar()
@@ -166,6 +216,23 @@ else:
                 self._worker.stop()
                 self._worker.wait(3000)
             super().closeEvent(event)
+
+        def _update_status(self, message: str, timeout: int = 0) -> None:
+            self.statusBar().showMessage(message, timeout)
+
+        def _toggle_local_model_mode(self, checked: bool) -> None:
+            self._apply_local_model_enabled_state(checked)
+            if checked:
+                self._append_log("Включён режим использования локальной модели.")
+            else:
+                self._append_log("Локальная модель отключена, разрешена загрузка из Hugging Face.")
+
+        def _apply_local_model_enabled_state(self, base_enabled: bool | None = None) -> None:
+            if base_enabled is None:
+                base_enabled = True
+            enabled = bool(base_enabled and self.local_model_checkbox.isChecked())
+            self.local_model_edit.setEnabled(enabled)
+            self.local_model_browse.setEnabled(enabled)
 
         def _choose_input(self) -> None:
             file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -193,6 +260,15 @@ else:
             )
             if directory:
                 self.output_edit.setText(directory)
+
+        def _choose_local_model_dir(self) -> None:
+            directory = QtWidgets.QFileDialog.getExistingDirectory(
+                self,
+                "Каталог модели",
+                str(PROJECT_ROOT),
+            )
+            if directory:
+                self.local_model_edit.setText(directory)
 
         def _ensure_output_dir(self) -> None:
             try:
@@ -222,12 +298,46 @@ else:
             for widget in self._interactive_widgets:
                 widget.setEnabled(enabled)
             self.run_button.setEnabled(enabled)
+            self._apply_local_model_enabled_state(enabled)
 
         def _open_logs_folder(self) -> None:
             if not self._log_file_path or QDesktopServices is None or QUrl is None:
                 return
             directory = self._log_file_path.parent
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
+
+        def _prefetch_model(self) -> None:
+            if self._prefetch_thread and self._prefetch_thread.isRunning():
+                return
+            selector = self.model_combo.currentText()
+            self._append_log(f"Скачивание модели {selector}…")
+            self._update_status("Скачивание модели…")
+            self.prefetch_button.setEnabled(False)
+            self._prefetch_thread = ModelPrefetchThread(selector, self)
+            self._prefetch_thread.finished.connect(self._on_prefetch_finished)
+            self._prefetch_thread.start()
+
+        def _on_prefetch_finished(self, success: bool, payload: str) -> None:
+            self.prefetch_button.setEnabled(True)
+            self._update_status("Готово", 5000)
+            thread = self._prefetch_thread
+            self._prefetch_thread = None
+            if thread is not None:
+                thread.deleteLater()
+            if success:
+                self._append_log(f"Модель загружена: {payload}")
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Загрузка модели",
+                    f"Модель сохранена в {payload}",
+                )
+            else:
+                self._append_log(f"Ошибка загрузки модели: {payload}")
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Загрузка модели",
+                    f"Не удалось загрузить модель: {payload}",
+                )
 
         def _start_transcription(self) -> None:
             if self._worker and self._worker.isRunning():
@@ -266,6 +376,27 @@ else:
                 )
                 return
 
+            local_model_dir: Optional[Path] = None
+            allow_download = True
+            if self.local_model_checkbox.isChecked():
+                candidate = Path(self.local_model_edit.text().strip())
+                if not candidate.exists():
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Локальная модель",
+                        "Каталог модели не найден.",
+                    )
+                    return
+                if not list(candidate.glob("model.bin*")):
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Локальная модель",
+                        "В каталоге не найдено файлов model.bin*.",
+                    )
+                    return
+                local_model_dir = candidate
+                allow_download = False
+
             inputs = discover_inputs(Path(source), recursive=self.recursive_checkbox.isChecked())
             if not inputs:
                 QtWidgets.QMessageBox.warning(
@@ -275,9 +406,27 @@ else:
                 )
                 return
 
+            if not self._cdn_checked and allow_download:
+                self._append_log("Проверка доступности Hugging Face CDN…")
+                cdn_status = check_hf_cdn()
+                self._cdn_checked = True
+                cdn_issue = False
+                for url, status in cdn_status.items():
+                    self._append_log(f"{url}: {status}")
+                    if status.startswith("ERR") or " 200 " not in status and not status.startswith("200"):
+                        if "cdn-lfs" in url:
+                            cdn_issue = True
+                if cdn_issue:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Hugging Face CDN",
+                        "CDN Hugging Face недоступен. Загрузка модели может зависнуть.",
+                    )
+
             self._append_log("Запуск транскрибации (последовательный режим)…")
             self.progress_bar.setValue(0)
             self._set_controls_enabled(False)
+            self._update_status("Инициализация модели…")
 
             config = JobConfig(
                 ffmpeg=self._ffmpeg_path,
@@ -289,7 +438,12 @@ else:
                 language=self.language_combo.currentText(),
                 output_dir=output_dir,
                 beam_size=1,
+                local_model_dir=local_model_dir,
+                allow_download=allow_download,
             )
+
+            logging.getLogger("huggingface_hub").setLevel(logging.INFO)
+            logging.getLogger("app.core.model_prefetch").setLevel(logging.INFO)
 
             self._worker_had_errors = False
             self._worker = TranscribeWorker(config, self)
@@ -304,17 +458,23 @@ else:
             first_error = not self._worker_had_errors
             self._worker_had_errors = True
             self._append_log(message)
+            self._update_status("Ошибка обработки", 5000)
             if first_error:
                 QtWidgets.QMessageBox.critical(self, "Ошибка", message)
 
         def _on_worker_finished(self) -> None:
             self._set_controls_enabled(True)
-            self.progress_bar.setValue(100)
+            if self._worker:
+                had_error = self._worker.had_error
+            else:
+                had_error = False
+            self.progress_bar.setValue(100 if not had_error else self.progress_bar.value())
             if self._worker:
                 self._worker.deleteLater()
             self._worker = None
             if self._worker_had_errors:
                 self._append_log("Выполнено с ошибками. Проверьте лог выше.")
+                self._update_status("Завершено с ошибками", 5000)
                 QtWidgets.QMessageBox.warning(
                     self,
                     "Транскрибация",
@@ -322,6 +482,7 @@ else:
                 )
             else:
                 self._append_log("Готово: все файлы обработаны успешно")
+                self._update_status("Готово", 5000)
                 QtWidgets.QMessageBox.information(
                     self,
                     "Транскрибация",

@@ -2,19 +2,17 @@
 from __future__ import annotations
 
 import logging
-import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
+
+from app.core.paths import APP_DIR
 
 _LOGGER_ATTR = "_transcribatoraud_logging_configured"
 
 
 def _logs_root() -> Path:
-    base = os.getenv("LOCALAPPDATA")
-    if base:
-        return Path(base) / "TranscribatorAud" / "logs"
-    return Path.home() / "TranscribatorAud" / "logs"
+    return APP_DIR / "logs"
 
 
 def setup_logging(debug: bool = False) -> str:
