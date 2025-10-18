@@ -33,3 +33,55 @@ Thumbs.db
 # Runtime downloads
 models/
 cache/
+
+=== no-binaries guard ===
+
+dist/
+build/output/
+build/cache/
+.venv/
+pycache/
+*.pyc
+
+# binaries & archives
+
+*.exe
+*.dll
+*.bin
+*.pyd
+*.lib
+*.so
+*.dylib
+*.a
+*.whl
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+*.xz
+
+# media
+
+*.mp3
+*.wav
+*.flac
+*.aac
+*.m4a
+*.ogg
+*.mp4
+*.mkv
+*.mov
+*.avi
+
+# models
+
+*.onnx
+*.safetensors
+*.pt
+*.pth
+
+# local tools
+
+/resources/ffmpeg/*
+!/resources/ffmpeg/.gitkeep
