@@ -5,8 +5,40 @@ TRANSCRIBATORAUD — one-click builder
 #>
 [CmdletBinding()]
 param(
-    [switch]$Clean
+    [switch]$Clean,
+    [switch]$NoSyntaxCheck
 )
+
+function Resolve-Pwsh {
+    try {
+        $command = Get-Command pwsh -ErrorAction Stop
+        return $command.Source
+    } catch {
+        return $null
+    }
+}
+
+$PwshPath = Resolve-Pwsh
+
+function Invoke-PS {
+    param(
+        [string]$Command
+    )
+
+    if ($PwshPath) {
+        & $PwshPath -NoProfile -Command $Command
+    } else {
+        & powershell -NoProfile -Command $Command
+    }
+}
+
+if (-not $NoSyntaxCheck) {
+    try {
+        Invoke-PS "Write-Output 'syntax check ok'"
+    } catch {
+        Write-Host "Skip syntax check (no pwsh)."
+    }
+}
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
