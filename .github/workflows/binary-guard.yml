@@ -1,16 +1,18 @@
 name: Binary guard
-on: [pull_request]
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - name: Check for binaries
-        run: |
-          set -e
-          BAD_EXT='exe|dll|bin|pyd|lib|so|dylib|a|whl|zip|7z|rar|tar|gz|xz|mp3|wav|flac|aac|m4a|ogg|mp4|mkv|mov|avi|onnx|safetensors|pt|pth|iso|img'
-          if git ls-files -z | tr '\0' '\n' | egrep -i ".($BAD_EXT)$"; then
-            echo "::error::Binary-like files detected in repo."; exit 1
-          fi
-          echo "OK: no binaries tracked."
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run binary guard
+        run: python tools/ci/check_no_binaries.py
