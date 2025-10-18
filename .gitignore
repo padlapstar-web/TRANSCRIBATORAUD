@@ -1,0 +1,92 @@
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Build artifacts
+build/
+dist/
+.eggs/
+*.egg-info/
+
+data/
+models/
+logs/
+.tmp/
+tmp/
+.cache/
+.mypy_cache/
+.pytest_cache/
+coverage/
+
+# Binary executables and libraries
+*.exe
+*.dll
+*.pyd
+*.so
+*.dylib
+*.lib
+*.a
+*.obj
+*.pdb
+
+# Archives and compressed packages
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.gz
+*.bz2
+*.xz
+*.lz
+*.lzma
+*.tgz
+*.tbz
+*.tbz2
+
+# Media files
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.aac
+*.mp4
+*.m4a
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# Images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.svg
+*.ico
+*.icns
+*.tif
+*.tiff
+*.webp
+*.psd
+
+# Databases and fonts
+*.db
+*.sqlite
+*.sqlite3
+*.ttf
+*.otf
+
+# Runtime directories
+runtime/
+.DS_Store
+
