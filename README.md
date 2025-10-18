@@ -40,36 +40,49 @@ TRANSCRIBATORAUD/
 
 ## Быстрый старт (разработка)
 
+> Требуется Python 3.12 из [python.org](https://www.python.org). Дистрибутивы Anaconda/Miniconda не поддерживаются.
+
+### Один скрипт
+
+Bootstrap-скрипты создают виртуальное окружение `.venv`, устанавливают зависимости, скачивают ffmpeg (через
+`scripts/fetch_assets.py`, файлы остаются вне git) и выполняют smoke-сборку PyInstaller.
+
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
-pip install -r requirements.txt
-python app/main.py
+# Linux / macOS
+bash scripts/bootstrap.sh
 ```
 
-### One-click сборка EXE (Windows)
-Если Windows жалуется на исполнение скриптов, перед запуском можно разово выполнить:
-`Set-ExecutionPolicy Bypass -Scope Process -Force`
+```powershell
+# Windows
+pwsh -File .\scripts\bootstrap.ps1 -PythonBin "C:\Python312\python.exe"
+```
 
-> Скрипт использует только установленный **python.org** интерпретатор версии 3.12 (через `py -3.12` или стандартные пути). Если он не найден — сборка прерывается с подсказкой; дистрибутивы Anaconda/Miniconda не поддерживаются.
+После завершения активируйте окружение и запускайте приложение вручную:
 
+```bash
+source .venv/bin/activate        # Windows: .\.venv\Scripts\Activate.ps1
+python app/main.py               # GUI запускается по умолчанию
+```
 
-> 💡 "Двойной клик → EXE": просто открой `build/RunMe.bat`, и через пару минут готовый бинарь появится в `dist/TRANSCRIBATORAUD/`.
+## Локальная сборка EXE (Windows)
 
-Скрипту нужен доступ в интернет для установки Python 3.12 (если не найден) и скачивания ffmpeg.
+Если Windows жалуется на исполнение скриптов, перед запуском можно разово выполнить
+`Set-ExecutionPolicy Bypass -Scope Process -Force`.
 
-1. Двойной клик по `build/RunMe.bat` (или `powershell -File .\build\RunMe.ps1`).
-2. Скрипт автоматически:
-   - создаст и активирует виртуальное окружение `.venv`;
-   - установит зависимости проекта и PyInstaller;
-   - скачает `ffmpeg.exe` и `ffprobe.exe` в `resources\ffmpeg` (файлы не попадают в git); 
-   - соберёт `dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe`.
-3. Запусти собранное приложение:
-   ```powershell
-   .\dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe --help
-   ```
+Для сборки десктопного EXE используется скрипт `build/RunMe.ps1` (для двойного клика есть обёртка `build/RunMe.bat`).
+Скрипт строго ищет Python 3.12 из python.org, собирает проект через bootstrap и оставляет готовый бинарь в `dist/`.
+Каталог `dist/` находится в `.gitignore`, поэтому артефакты сборки нельзя коммитить.
 
-Опция `build/RunMe.ps1 -Clean` удаляет временные каталоги перед повторной сборкой.
+```powershell
+powershell -File .\build\RunMe.ps1
+
+# Полная пересборка
+powershell -File .\build\RunMe.ps1 -Clean
+```
+
+После выполнения EXE доступен по пути `dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe`. Проверь работу, но не добавляй артефакты
+в историю репозитория.
+
 
 По умолчанию запускается GUI-заготовка. Для CLI доступна полноценная утилита:
 
