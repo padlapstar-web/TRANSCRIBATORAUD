@@ -31,12 +31,10 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCOD
 New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot $OutputDir) | Out-Null
 
 $distTarget = Join-Path (Join-Path $ProjectRoot $OutputDir) 'TRANSCRIBATORAUD'
-$postCopy = Join-Path $PSScriptRoot 'post_build_copy_ffmpeg.ps1'
-if (Test-Path $distTarget -PathType Container -ErrorAction SilentlyContinue) {
-    & $postCopy -DistDir $distTarget
-} else {
-    Write-Warning "Каталог $distTarget не найден после сборки"
-}
+Write-Host "Running post build ffmpeg copy..."
+$Post = Join-Path $PSScriptRoot 'post_build_copy_ffmpeg.ps1'
+& powershell -NoProfile -ExecutionPolicy Bypass -File $Post -ExeDir $distTarget
+Write-Host "Post build ffmpeg copy done."
 
 $gitStatus = git -C $ProjectRoot status --short
 if ($gitStatus) {

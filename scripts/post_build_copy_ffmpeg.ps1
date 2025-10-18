@@ -1,74 +1,82 @@
-#requires -version 5.1
-[CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$DistDir
+  [string]$ExeDir
 )
 
-Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-function Resolve-Executable {
-    param(
-        [string[]]$Names
-    )
+function Log($m) { Write-Host "[post-ffmpeg] $m" }
 
-    $candidates = @()
-    if ($env:FFMPEG_BIN) {
-        $candidates += $env:FFMPEG_BIN
-    }
-    if ($env:FFMPEG_HOME) {
-        foreach ($name in $Names) {
-            $candidates += (Join-Path $env:FFMPEG_HOME $name)
-            $candidates += (Join-Path (Join-Path $env:FFMPEG_HOME 'bin') $name)
-        }
-    }
-    foreach ($name in $Names) {
-        try {
-            $cmd = Get-Command $name -ErrorAction Stop
-            if ($cmd.Source) {
-                $candidates += $cmd.Source
-            }
-        } catch {
-            continue
-        }
-    }
-
-    foreach ($candidate in $candidates) {
-        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
-        $path = Resolve-Path -LiteralPath $candidate -ErrorAction SilentlyContinue
-        if ($path) { return $path.Path }
-        if ($candidate -notmatch '\.exe$') {
-            $exeCandidate = "$candidate.exe"
-            $path = Resolve-Path -LiteralPath $exeCandidate -ErrorAction SilentlyContinue
-            if ($path) { return $path.Path }
-        }
-    }
-
-    return $null
+function Find-FromPath([string]$name) {
+  $c = Get-Command $name -ErrorAction SilentlyContinue
+  if ($c) { return $c.Source }
+  return $null
 }
 
-$distPath = Resolve-Path -LiteralPath $DistDir -ErrorAction SilentlyContinue
-if (-not $distPath) {
-    Write-Warning "Dist directory '$DistDir' не найден"
-    return
-}
-$distPath = $distPath.Path
+function Find-FFmpeg {
+  if ($env:FFMPEG_BIN -and (Test-Path $env:FFMPEG_BIN)) { return $env:FFMPEG_BIN }
 
-$ffmpegPath = Resolve-Executable @('ffmpeg.exe', 'ffmpeg')
+  if ($env:FFMPEG_HOME) {
+    $p = Join-Path $env:FFMPEG_HOME 'bin\ffmpeg.exe'
+    if (Test-Path $p) { return $p }
+  }
+
+  $fromPath = Find-FromPath 'ffmpeg.exe'
+  if ($fromPath) {
+    if ($fromPath -match '\\chocolatey\\bin\\ffmpeg\.exe$' -and $env:ChocolateyInstall) {
+      $cand = Get-ChildItem -Path (Join-Path $env:ChocolateyInstall 'lib\ffmpeg\tools') -Filter 'ffmpeg.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+      if ($cand) { return $cand.FullName }
+    }
+    return $fromPath
+  }
+
+  if ($env:ChocolateyInstall) {
+    $cand = Get-ChildItem -Path (Join-Path $env:ChocolateyInstall 'lib\ffmpeg\tools') -Filter 'ffmpeg.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cand) { return $cand.FullName }
+  }
+
+  return $null
+}
+
+function MaybeFind-FFprobe($ffDir) {
+  $p = Join-Path $ffDir 'ffprobe.exe'
+  if (Test-Path $p) { return $p }
+
+  $fromPath = Find-FromPath 'ffprobe.exe'
+  if ($fromPath) { return $fromPath }
+
+  if ($env:ChocolateyInstall) {
+    $cand = Get-ChildItem -Path (Join-Path $env:ChocolateyInstall 'lib\ffmpeg\tools') -Filter 'ffprobe.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cand) { return $cand.FullName }
+  }
+
+  return $null
+}
+
+# Resolve ExeDir if not passed
+if (-not $ExeDir) {
+  $distGuess = Resolve-Path (Join-Path $PSScriptRoot '..\dist\TRANSCRIBATORAUD') -ErrorAction SilentlyContinue
+  if ($distGuess) { $ExeDir = $distGuess.Path } else { throw "ExeDir not provided and dist folder not found." }
+}
+
+$dst = Join-Path $ExeDir 'resources\ffmpeg\bin'
+New-Item -ItemType Directory -Force -Path $dst | Out-Null
+
+$ffmpegPath = Find-FFmpeg
 if (-not $ffmpegPath) {
-    Write-Warning 'FFmpeg не найден в системе. Пропускаем копирование.'
-    return
+  Log 'ffmpeg.exe not found in FFMPEG_BIN / FFMPEG_HOME / PATH / Chocolatey. Skipping copy.'
+  exit 0  # do not fail the build
 }
 
-$targetBin = Join-Path $distPath 'resources/ffmpeg/bin'
-New-Item -ItemType Directory -Force -Path $targetBin | Out-Null
-Copy-Item -LiteralPath $ffmpegPath -Destination (Join-Path $targetBin 'ffmpeg.exe') -Force
+Log "ffmpeg.exe: $ffmpegPath"
+Copy-Item -Path $ffmpegPath -Destination (Join-Path $dst 'ffmpeg.exe') -Force
 
-$ffprobePath = Resolve-Executable @('ffprobe.exe', 'ffprobe')
+$ffprobePath = MaybeFind-FFprobe (Split-Path -Parent $ffmpegPath)
 if ($ffprobePath) {
-    Copy-Item -LiteralPath $ffprobePath -Destination (Join-Path $targetBin 'ffprobe.exe') -Force
+  Log "ffprobe.exe: $ffprobePath"
+  Copy-Item -Path $ffprobePath -Destination (Join-Path $dst 'ffprobe.exe') -Force
+} else {
+  Log 'ffprobe.exe not found, continue without it.'
 }
-else {
-    Write-Warning 'FFprobe не найден — продолжим без него.'
-}
+
+Log "Installed to: $dst"
+exit 0
