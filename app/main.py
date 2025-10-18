@@ -1,11 +1,19 @@
 """Entry point for TRANSCRIBATORAUD application."""
 from __future__ import annotations
+
 import os
 import sys
+from pathlib import Path
 from typing import Sequence
+
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 from app.cli import run_cli
 from app.core.ffmpeg import find_ffmpeg
+from app.core.logging_setup import setup_logging
+from app.diagnostics.runtime_info import dump_runtime_info
 
 
 def _prepend_ffmpeg_to_path() -> None:
@@ -33,6 +41,7 @@ _prepend_ffmpeg_to_path()
 
 def _run_gui() -> int:
     try:
+        from PySide6 import QtCore
         from PySide6.QtWidgets import QApplication
     except ImportError as exc:  # pragma: no cover - GUI dependency missing
         print(
@@ -43,7 +52,10 @@ def _run_gui() -> int:
         return 1
 
     from app.ui.main_window import MainWindow
+    from app.ui.console import LogDock
 
+    log_file = setup_logging(debug=True)
+    dump_runtime_info()
     app = QApplication(sys.argv)
     ffmpeg_path = find_ffmpeg()
     if ffmpeg_path:
@@ -54,6 +66,10 @@ def _run_gui() -> int:
             file=sys.stderr,
         )
     window = MainWindow()
+    window.set_log_file_path(Path(log_file))
+    console = LogDock(window)
+    window.addDockWidget(QtCore.Qt.BottomDockWidgetArea, console)
+    console.attach_root_logger()
     window.show()
     return app.exec()
 

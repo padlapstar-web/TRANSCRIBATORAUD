@@ -1,24 +1,26 @@
 """Main window implementation for the TRANSCRIBATORAUD GUI."""
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 from app.core.batch import discover_inputs
-from app.core.logging import setup_logging
 from app.core.ffmpeg import find_ffmpeg
 from app.core.worker import JobConfig, TranscribeWorker
 
 try:  # pragma: no cover - optional dependency at runtime
     from PySide6 import QtCore, QtGui, QtWidgets
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtCore import QUrl
 except ImportError:  # pragma: no cover - executed when PySide6 is not installed
-    QtCore = QtGui = QtWidgets = None  # type: ignore[misc,assignment]
+    QtCore = QtGui = QtWidgets = QDesktopServices = QUrl = None  # type: ignore[misc,assignment]
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "out"
-_LOGGER = setup_logging().getChild("gui")
+_LOGGER = logging.getLogger(__name__)
 
 
 if QtWidgets is None or QtCore is None or QtGui is None:  # pragma: no cover
@@ -47,6 +49,8 @@ else:
             self._ffmpeg_checked = False
             self._ffmpeg_path: Optional[Path] = None
             self._worker_had_errors = False
+            self._log_file_path: Optional[Path] = None
+            self._open_logs_action: Optional[QtGui.QAction] = None
 
             self._build_ui()
             self._ensure_output_dir()
@@ -144,6 +148,13 @@ else:
             self.output_browse_button.clicked.connect(self._choose_output)
             self.run_button.clicked.connect(self._start_transcription)
 
+            if hasattr(self, "menuBar"):
+                menu_bar = self.menuBar()
+                help_menu = menu_bar.addMenu("Help")
+                self._open_logs_action = help_menu.addAction("Open logs folder")
+                self._open_logs_action.triggered.connect(self._open_logs_folder)
+                self._open_logs_action.setEnabled(False)
+
         def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
             super().showEvent(event)
             if not self._ffmpeg_checked:
@@ -200,11 +211,23 @@ else:
 
         def _append_log(self, message: str) -> None:
             self.log_output.appendPlainText(message)
+            _LOGGER.info(message)
+
+        def set_log_file_path(self, path: Path) -> None:
+            self._log_file_path = path
+            if self._open_logs_action is not None:
+                self._open_logs_action.setEnabled(True)
 
         def _set_controls_enabled(self, enabled: bool) -> None:
             for widget in self._interactive_widgets:
                 widget.setEnabled(enabled)
             self.run_button.setEnabled(enabled)
+
+        def _open_logs_folder(self) -> None:
+            if not self._log_file_path or QDesktopServices is None or QUrl is None:
+                return
+            directory = self._log_file_path.parent
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
 
         def _start_transcription(self) -> None:
             if self._worker and self._worker.isRunning():
