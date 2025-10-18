@@ -7,8 +7,68 @@ TRANSCRIBATORAUD — one-click builder
 [CmdletBinding()]
 param(
     [switch]$Clean,
-    [switch]$NoSyntaxCheck
+    [switch]$NoSyntaxCheck,
+    [switch]$KillApp
 )
+
+function Stop-AppInstances {
+    param(
+        [string[]] $ProcessNames = @('TRANSCRIBATORAUD', 'TRANSCRIBATORAUD_console')
+    )
+
+    foreach ($name in $ProcessNames) {
+        Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+                $_.CloseMainWindow() | Out-Null
+            } catch {}
+        }
+    }
+
+    Start-Sleep -Seconds 2
+
+    foreach ($name in $ProcessNames) {
+        Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "Killing $($_.ProcessName) PID=$($_.Id)" -ForegroundColor Yellow
+            try {
+                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            } catch {}
+        }
+    }
+}
+
+function Clear-ReadOnlyAttributes {
+    param([string] $Path)
+    if (Test-Path $Path) {
+        Get-ChildItem -Path $Path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+                if ($_.Attributes -band [IO.FileAttributes]::ReadOnly) {
+                    $_.Attributes = $_.Attributes -bxor [IO.FileAttributes]::ReadOnly
+                }
+            } catch {}
+        }
+    }
+}
+
+function Remove-Path-Retry {
+    param(
+        [Parameter(Mandatory=$true)][string] $Path,
+        [int] $MaxRetries = 15,
+        [int] $DelaySec = 1
+    )
+    if (-not (Test-Path $Path)) { return }
+    Clear-ReadOnlyAttributes -Path $Path
+
+    for ($i=1; $i -le $MaxRetries; $i++) {
+        try {
+            Remove-Item -Recurse -Force -LiteralPath $Path -ErrorAction Stop
+            return
+        } catch {
+            Write-Host "[$i/$MaxRetries] '$Path' still locked. Waiting $DelaySec s..." -ForegroundColor Yellow
+            Start-Sleep -Seconds $DelaySec
+        }
+    }
+    throw "Could not delete '$Path' - files are locked."
+}
 
 function Resolve-PowerShell {
     try {
@@ -33,6 +93,22 @@ if (-not $NoSyntaxCheck) {
         Invoke-PS "Write-Output 'syntax check ok'"
     } catch {
         Write-Host "Skip syntax check (PowerShell 7 not found)."
+    }
+}
+
+if ($KillApp) {
+    cmd /c "taskkill /F /IM TRANSCRIBATORAUD.exe /T" | Out-Null
+    cmd /c "taskkill /F /IM TRANSCRIBATORAUD_console.exe /T" | Out-Null
+}
+
+$running = Get-Process -Name 'TRANSCRIBATORAUD','TRANSCRIBATORAUD_console' -ErrorAction SilentlyContinue
+if ($running) {
+    Write-Host "Found running instances: $($running.ProcessName -join ', '). Trying to stop..." -ForegroundColor Yellow
+    Stop-AppInstances
+    Start-Sleep -Seconds 1
+    $still = Get-Process -Name 'TRANSCRIBATORAUD','TRANSCRIBATORAUD_console' -ErrorAction SilentlyContinue
+    if ($still) {
+        throw "Running app instances are still alive. Close them manually and rerun the build."
     }
 }
 
@@ -68,11 +144,25 @@ function Get-Python312Path {
 }
 
 if ($Clean) {
-    Write-Host "Cleaning previous artefacts..."
-    @('.venv', 'dist', 'build/output', 'build/cache') | ForEach-Object {
-        $target = Join-Path $ProjectRoot $_
+    Write-Host "Stopping running app instances..." -ForegroundColor Cyan
+    Stop-AppInstances
+
+    $distDir  = Join-Path $ProjectRoot 'dist'
+    $buildDir = Join-Path $ProjectRoot 'build/TRANSCRIBATORAUD'
+
+    Write-Host "Cleaning previous artefacts..." -ForegroundColor Cyan
+
+    if (Test-Path $distDir)  { Remove-Path-Retry -Path $distDir  -MaxRetries 15 -DelaySec 1 }
+    if (Test-Path $buildDir) { Remove-Path-Retry -Path $buildDir -MaxRetries 15 -DelaySec 1 }
+
+    $pyiCache = Join-Path $env:LOCALAPPDATA 'pyinstaller'
+    if (Test-Path $pyiCache) { Remove-Path-Retry -Path $pyiCache -MaxRetries 5 -DelaySec 1 }
+
+    $other = @('.venv', 'build/output', 'build/cache')
+    foreach ($rel in $other) {
+        $target = Join-Path $ProjectRoot $rel
         if (Test-Path $target) {
-            Remove-Item -Recurse -Force $target
+            Remove-Path-Retry -Path $target -MaxRetries 5 -DelaySec 1
         }
     }
 }
