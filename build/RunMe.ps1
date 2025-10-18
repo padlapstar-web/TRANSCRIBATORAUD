@@ -38,7 +38,10 @@ if (-not $NoSyntaxCheck) {
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+
+$env:PYI_PROJECT_ROOT = $ProjectRoot
+$env:PYI_SPEC_DIR = $PSScriptRoot
 
 function Get-Python312Path {
     $candidates = @(

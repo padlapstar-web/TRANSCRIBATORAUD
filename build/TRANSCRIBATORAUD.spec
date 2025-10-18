@@ -1,15 +1,37 @@
 # -*- mode: python ; coding: utf-8 -*-
-import pathlib
+
+import os
+import sys
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_submodules
 
-project_root = pathlib.Path(__file__).resolve().parents[1]
-app_entry = project_root / "app" / "main.py"
+SPEC_DIR = Path(os.environ.get("PYI_SPEC_DIR", "")) if os.environ.get("PYI_SPEC_DIR") else None
+if not SPEC_DIR:
+    try:
+        SPEC_DIR = Path(__file__).resolve().parent
+    except NameError:
+        if (Path.cwd() / "build" / "TRANSCRIBATORAUD.spec").exists():
+            SPEC_DIR = Path.cwd() / "build"
+        else:
+            SPEC_DIR = Path.cwd()
+
+if SPEC_DIR.name.lower() == "build":
+    default_project_root = SPEC_DIR.parent
+else:
+    default_project_root = SPEC_DIR
+
+PROJECT_ROOT = Path(os.environ.get("PYI_PROJECT_ROOT", default_project_root))
+
+pathex = [str(PROJECT_ROOT), str(SPEC_DIR)]
+
+app_entry = PROJECT_ROOT / "app" / "main.py"
 
 hiddenimports = collect_submodules("app")
 
 a = Analysis(
     [str(app_entry)],
-    pathex=[str(project_root / "app")],
+    pathex=pathex,
     binaries=[],
     datas=[],
     hiddenimports=hiddenimports,

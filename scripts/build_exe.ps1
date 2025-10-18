@@ -8,7 +8,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $specPath = Join-Path $ProjectRoot $SpecFile
 
 if (-not (Test-Path $specPath)) {
@@ -21,6 +21,9 @@ if (Test-Path $venvPath) {
     $activate = Join-Path $venvPath 'Scripts/Activate.ps1'
     . $activate
 }
+
+$env:PYI_PROJECT_ROOT = $ProjectRoot
+$env:PYI_SPEC_DIR = (Resolve-Path (Join-Path $ProjectRoot 'build')).Path
 
 & python -m PyInstaller --clean $specPath
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
