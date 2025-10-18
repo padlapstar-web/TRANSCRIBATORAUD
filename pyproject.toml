@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Offline batch audio transcription toolkit"
 authors = [{ name = "Transcribator AUD Team" }]
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "faster-whisper",
     "PySide6",
