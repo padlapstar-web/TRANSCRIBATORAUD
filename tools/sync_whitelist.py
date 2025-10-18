@@ -109,7 +109,20 @@ def main() -> None:
             copied += 1
     ffmpeg_dir = ROOT / "resources/ffmpeg"
     ffmpeg_dir.mkdir(parents=True, exist_ok=True)
-    (ffmpeg_dir / ".gitkeep").write_text("", encoding="utf-8")
+    gitkeep = ffmpeg_dir / ".gitkeep"
+    gitkeep.write_text("", encoding="utf-8")
+    for extra in ffmpeg_dir.iterdir():
+        if extra.name == ".gitkeep":
+            continue
+        if extra.is_dir():
+            for child in sorted(extra.rglob("*"), reverse=True):
+                if child.is_file():
+                    child.unlink()
+                else:
+                    child.rmdir()
+            extra.rmdir()
+        else:
+            extra.unlink()
     print(f"Copied {copied} allowed files from {SRC_REF}")
 
 
