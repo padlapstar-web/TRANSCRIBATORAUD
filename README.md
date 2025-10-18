@@ -54,7 +54,7 @@ bash scripts/bootstrap.sh
 
 ```powershell
 # Windows
-pwsh -File .\scripts\bootstrap.ps1 -PythonBin "C:\Python312\python.exe"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1 -PythonBin "C:\Python312\python.exe"
 ```
 
 После завершения активируйте окружение и запускайте приложение вручную:
@@ -74,10 +74,10 @@ python app/main.py               # GUI запускается по умолча�
 Каталог `dist/` находится в `.gitignore`, поэтому артефакты сборки нельзя коммитить.
 
 ```powershell
-powershell -File .\build\RunMe.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build\RunMe.ps1
 
 # Полная пересборка
-powershell -File .\build\RunMe.ps1 -Clean
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build\RunMe.ps1 -Clean
 ```
 
 После выполнения EXE доступен по пути `dist\TRANSCRIBATORAUD\TRANSCRIBATORAUD.exe`. Проверь работу, но не добавляй артефакты
