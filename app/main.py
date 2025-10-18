@@ -1,19 +1,31 @@
 """Entry point for TRANSCRIBATORAUD application."""
 from __future__ import annotations
-
 import os
 import sys
 from typing import Sequence
 
 from app.cli import run_cli
+from app.core.ffmpeg import find_ffmpeg
 
 
 def _prepend_ffmpeg_to_path() -> None:
     """Ensure bundled ffmpeg binaries are available via PATH."""
-    root = os.path.dirname(os.path.dirname(__file__))
-    ffmpeg_dir = os.path.join(root, "resources", "ffmpeg")
-    if os.path.isdir(ffmpeg_dir):
-        os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    candidate_dirs = [
+        root / "resources" / "ffmpeg" / "bin",
+        root / "resources" / "ffmpeg",
+    ]
+
+    existing = [path for path in candidate_dirs if path.is_dir()]
+    if not existing:
+        return
+
+    path_env = os.environ.get("PATH", "")
+    prefixes = os.pathsep.join(str(path) for path in existing)
+    os.environ["PATH"] = prefixes + (os.pathsep + path_env if path_env else "")
 
 
 _prepend_ffmpeg_to_path()
@@ -33,6 +45,14 @@ def _run_gui() -> int:
     from app.ui.main_window import MainWindow
 
     app = QApplication(sys.argv)
+    ffmpeg_path = find_ffmpeg()
+    if ffmpeg_path:
+        print(f"FFmpeg обнаружен: {ffmpeg_path}")
+    else:
+        print(
+            "Внимание: FFmpeg не найден. Установите ffmpeg и добавьте его в PATH или переменные окружения.",
+            file=sys.stderr,
+        )
     window = MainWindow()
     window.show()
     return app.exec()

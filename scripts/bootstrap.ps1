@@ -30,7 +30,5 @@ if (Test-Path (Join-Path $ProjectRoot 'requirements.txt')) {
 }
 python -m pip install --upgrade pyinstaller
 
-python (Join-Path $ProjectRoot 'scripts/fetch_assets.py')
-
 $buildScript = Join-Path $ProjectRoot 'scripts/build_exe.ps1'
 & $buildScript -SpecFile 'build/TRANSCRIBATORAUD.spec' -VenvDir $VenvDir

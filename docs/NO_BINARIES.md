@@ -16,7 +16,7 @@ If you discover such files in the working tree, delete them before committing. B
 
 ## Working with large dependencies
 
-When a tool or dependency requires binary assets (FFmpeg, ML models, etc.), download them at build-time instead of committing them. Use the scripts in `scripts/` (`fetch_assets.py`, `bootstrap`, `build_exe`) to automate setup, downloads with checksum verification, and packaging. Place downloaded artefacts in `resources/`, `data/`, or `models/` directories that are already ignored by `.gitignore`.
+When a tool or dependency requires binary assets (FFmpeg, ML models, etc.), install them locally and keep them outside of git. The application autodetects FFmpeg via environment variables (`FFMPEG_BIN`, `FFMPEG_HOME`), the system `PATH`, and bundled folders in the PyInstaller build. Use the helper CLI flag `TRANSCRIBATORAUD.exe --check-ffmpeg` (или `python app/cli.py --check-ffmpeg`) to verify availability. Packaging scripts (`build/RunMe.ps1`, `scripts/build_exe.ps1`) copy binaries from the local installation into `dist/` during the build, but the repository continues to track only the placeholder `resources/ffmpeg/.gitkeep`.
 
 ## Pull request expectations
 

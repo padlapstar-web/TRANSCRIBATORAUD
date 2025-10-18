@@ -1,14 +1,13 @@
 """Main window implementation for the TRANSCRIBATORAUD GUI."""
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
 from app.core.batch import BatchOptions, BatchResult, discover_inputs, process_batch
 from app.core.logging import setup_logging
+from app.core.ffmpeg import find_ffmpeg
 
 try:  # pragma: no cover - optional dependency at runtime
     from PySide6 import QtCore, QtGui, QtWidgets
@@ -18,7 +17,6 @@ except ImportError:  # pragma: no cover - executed when PySide6 is not installed
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "out"
-_FFMPEG_DIR = PROJECT_ROOT / "resources" / "ffmpeg"
 _LOGGER = setup_logging().getChild("gui")
 
 
@@ -289,69 +287,13 @@ else:
                 self._append_log(f"Не удалось создать папку вывода: {exc}")
 
         def _check_ffmpeg(self) -> None:
-            if self._ffmpeg_present():
-                self._append_log("FFmpeg найден в resources/ffmpeg")
-                return
-
-            self._append_log("FFmpeg не найден. Можно скачать локально через fetch_assets.py")
-            response = QtWidgets.QMessageBox.question(
-                self,
-                "FFmpeg",
-                "FFmpeg не обнаружен. Скачать и установить?",
-            )
-            if response == QtWidgets.QMessageBox.StandardButton.Yes:
-                self._fetch_ffmpeg()
+            ffmpeg_path = find_ffmpeg()
+            if ffmpeg_path:
+                self._append_log(f"FFmpeg обнаружен: {ffmpeg_path}")
             else:
-                self._append_log("Пропущена загрузка FFmpeg — некоторые файлы могут не обрабатываться")
-
-        def _fetch_ffmpeg(self) -> None:
-            script = PROJECT_ROOT / "scripts" / "fetch_assets.py"
-            if not script.exists():
-                self._append_log("Скрипт fetch_assets.py не найден")
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "FFmpeg",
-                    "Скрипт scripts/fetch_assets.py не найден. Скачивание невозможно.",
+                self._append_log(
+                    "FFmpeg не найден. Установите ffmpeg и добавьте его в PATH или переменные окружения."
                 )
-                return
-
-            self._append_log("Запуск scripts/fetch_assets.py…")
-            try:
-                result = subprocess.run(
-                    [sys.executable, str(script)],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    cwd=str(PROJECT_ROOT),
-                )
-                for line in result.stdout.splitlines():
-                    self._append_log(line)
-                if result.stderr:
-                    for line in result.stderr.splitlines():
-                        self._append_log(line)
-            except subprocess.CalledProcessError as exc:
-                self._append_log("Ошибка загрузки FFmpeg")
-                if exc.stdout:
-                    for line in exc.stdout.splitlines():
-                        self._append_log(line)
-                if exc.stderr:
-                    for line in exc.stderr.splitlines():
-                        self._append_log(line)
-                QtWidgets.QMessageBox.critical(
-                    self,
-                    "FFmpeg",
-                    "Не удалось скачать FFmpeg. Подробности в логе.",
-                )
-            else:
-                self._append_log("FFmpeg загружен. Проверьте папку resources/ffmpeg")
-
-        def _ffmpeg_present(self) -> bool:
-            if not _FFMPEG_DIR.exists():
-                return False
-            for name in os.listdir(_FFMPEG_DIR):
-                if name.lower().startswith("ffmpeg") or name.lower().startswith("ffprobe"):
-                    return True
-            return False
 
         def _append_log(self, message: str) -> None:
             self.log_output.appendPlainText(message)

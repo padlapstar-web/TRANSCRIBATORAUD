@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -10,6 +11,7 @@ from tqdm import tqdm
 from app.core import exporter
 from app.core.batch import BatchOptions, discover_inputs, process_batch
 from app.core.logging import setup_logging
+from app.core.ffmpeg import find_ffmpeg
 
 _ROOT_LOGGER = setup_logging()
 _LOGGER = _ROOT_LOGGER.getChild("cli")
@@ -22,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--input",
-        required=True,
+        required=False,
         help="Path to an audio file, directory, or glob mask (e.g. *.wav)",
     )
     parser.add_argument(
@@ -92,6 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable VAD filtering to drop silence segments.",
     )
+    parser.add_argument(
+        "--check-ffmpeg",
+        action="store_true",
+        help="Check whether FFmpeg is discoverable and exit.",
+    )
     return parser
 
 
@@ -103,7 +110,23 @@ def run_cli(args: Iterable[str]) -> int:
     parser = build_parser()
     namespace = parser.parse_args(list(args))
 
-    source = Path(namespace.input)
+    if namespace.check_ffmpeg:
+        ffmpeg_path = find_ffmpeg()
+        if ffmpeg_path:
+            print(f"FFmpeg: {ffmpeg_path}")
+            return 0
+        print(
+            "FFmpeg не найден. Установите ffmpeg и добавьте его в PATH или переменные окружения.",
+            file=sys.stderr,
+        )
+        return 2
+
+    source_input = namespace.input
+    if not source_input:
+        parser.error("--input обязательно, если не используется --check-ffmpeg")
+        return 2  # pragma: no cover - parser.error завершает выполнение
+
+    source = Path(source_input)
     if namespace.output:
         output_dir = Path(namespace.output)
     elif source.is_file():

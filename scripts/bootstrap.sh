@@ -23,6 +23,4 @@ if [ -f "$PROJECT_ROOT/requirements.txt" ]; then
 fi
 python -m pip install --upgrade pyinstaller
 
-python "$PROJECT_ROOT/scripts/fetch_assets.py"
-
 bash "$PROJECT_ROOT/scripts/build_exe.sh"

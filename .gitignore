@@ -1,6 +1,10 @@
 # Build directories and virtual environments
 /dist/
-/build/
+/build/**
+!/build/*.ps1
+!/build/*.bat
+!/build/*.spec
+/out/
 /.venv/
 venv/
 env/
@@ -13,8 +17,8 @@ __pycache__/
 *.so
 
 # Binary artefacts (must never be committed)
-/resources/ffmpeg/*.exe
-/resources/ffmpeg/*.dll
+/resources/ffmpeg/**
+!/resources/ffmpeg/.gitkeep
 *.exe
 *.dll
 *.pyd
@@ -51,8 +55,6 @@ __pycache__/
 # Runtime downloads
 models/
 cache/
-resources/ffmpeg/*
-!resources/ffmpeg/.gitkeep
 
 # Tooling
 build/output/

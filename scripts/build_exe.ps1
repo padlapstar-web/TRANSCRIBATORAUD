@@ -30,6 +30,14 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCOD
 
 New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot $OutputDir) | Out-Null
 
+$distTarget = Join-Path (Join-Path $ProjectRoot $OutputDir) 'TRANSCRIBATORAUD'
+$postCopy = Join-Path $PSScriptRoot 'post_build_copy_ffmpeg.ps1'
+if (Test-Path $distTarget -PathType Container -ErrorAction SilentlyContinue) {
+    & $postCopy -DistDir $distTarget
+} else {
+    Write-Warning "Каталог $distTarget не найден после сборки"
+}
+
 $gitStatus = git -C $ProjectRoot status --short
 if ($gitStatus) {
     Write-Warning 'Build produced working tree changes. Verify that artefacts stay ignored.'

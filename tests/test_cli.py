@@ -83,3 +83,26 @@ def test_run_cli_defaults_to_pattern_parent(tmp_path, monkeypatch):
 
     assert exit_code == 0
     assert captured["output_dir"] == input_dir
+
+
+def test_check_ffmpeg_success(monkeypatch, capsys, tmp_path):
+    ffmpeg_path = tmp_path / "ffmpeg.exe"
+    ffmpeg_path.write_text("")
+
+    monkeypatch.setattr(cli, "find_ffmpeg", lambda: ffmpeg_path)
+
+    exit_code = cli.run_cli(["--check-ffmpeg"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert str(ffmpeg_path) in captured.out
+
+
+def test_check_ffmpeg_missing(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "find_ffmpeg", lambda: None)
+
+    exit_code = cli.run_cli(["--check-ffmpeg"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "FFmpeg" in captured.err

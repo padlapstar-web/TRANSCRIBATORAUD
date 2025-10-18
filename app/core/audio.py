@@ -1,10 +1,11 @@
 """Audio helper utilities."""
 from __future__ import annotations
 
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
+
+from app.core.ffmpeg import find_ffprobe
 
 SUPPORTED_EXTENSIONS = {
     ".wav",
@@ -21,27 +22,8 @@ def is_supported_audio(path: Path) -> bool:
     """Return True if the path points to a supported audio file."""
 
     return path.suffix.lower() in SUPPORTED_EXTENSIONS
-
-
-def _ffprobe_candidates() -> list[Path]:
-    here = Path(__file__).resolve().parents[2]
-    resources_dir = here / "resources" / "ffmpeg"
-    candidates: list[Path] = []
-    for name in ("ffprobe", "ffprobe.exe"):
-        local = resources_dir / name
-        if local.exists():
-            candidates.append(local)
-    probe_in_path = shutil.which("ffprobe")
-    if probe_in_path:
-        candidates.append(Path(probe_in_path))
-    return candidates
-
-
 def _resolve_ffprobe() -> Optional[Path]:
-    for candidate in _ffprobe_candidates():
-        if candidate.exists():
-            return candidate
-    return None
+    return find_ffprobe()
 
 
 def probe_duration(path: Path) -> Optional[float]:

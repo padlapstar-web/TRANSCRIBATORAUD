@@ -103,6 +103,8 @@ def iter_tracked_files() -> Iterable[pathlib.Path]:
 
 
 def is_text_file(path: pathlib.Path) -> bool:
+    if path.suffix.lower() in {".bat", ".cmd", ".ps1"}:
+        return True
     try:
         with path.open("rb") as fh:
             sample = fh.read(8192)
