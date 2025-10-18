@@ -22,10 +22,14 @@ dist/
 
 # Local tools
 /resources/ffmpeg/*
-!resources/ffmpeg/.keep
+!resources/ffmpeg/.gitkeep
 
 # OS/IDE
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+
+# Runtime downloads
+models/
+cache/

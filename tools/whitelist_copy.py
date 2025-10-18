@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import shutil, os, sys
+import shutil
+import os
+import sys
 
 ALLOW = [
   # код
   "app/**/*.py", "app/*.py",
+  "tests/**/*.py", "tests/*.py",
   # сборка и конфиги
-  "build/**/*.ps1","build/**/*.bat","build/**/*.sh","build/*.ps1","build/*.bat","build/*.sh",
+  "build/**/*.ps1","build/**/*.bat","build/**/*.sh","build/*.ps1","build/*.bat","build/*.sh","build/**/*.spec","build/*.spec",
   "*.spec","pyproject.toml","setup.cfg","requirements*.txt",
   ".editorconfig",".gitattributes",".pre-commit-config.yaml",
   # CI/доки
@@ -23,9 +26,11 @@ def copy_from(src_root: Path, dst_root: Path):
     seen = set()
     for pat in ALLOW:
         for p in match(pat, src_root):
-            if any(d in p.parts for d in DENY_DIRS): continue
+            if any(d in p.parts for d in DENY_DIRS) and p.name != '.gitkeep':
+                continue
             rel = p.relative_to(src_root)
-            if rel in seen: continue
+            if rel in seen:
+                continue
             dst = dst_root / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, dst)
