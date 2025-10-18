@@ -1,8 +1,8 @@
-#!/usr/bin/env pwsh
-<#!
-One-click build entry point. Ensures Python 3.12 from python.org is used,
-cleans optional artefacts, and dispatches to bootstrap/build scripts.
-!>
+﻿# encoding: utf-8
+<#
+TRANSCRIBATORAUD — one-click builder
+Правит venv, зависимости, ffmpeg и собирает EXE через PyInstaller.
+#>
 [CmdletBinding()]
 param(
     [switch]$Clean
