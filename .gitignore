@@ -1,34 +1,38 @@
-# Python bytecode and caches
+# Build directories and virtual environments
+/dist/
+/build/
+/.venv/
+venv/
+env/
+.env
+
+# Python caches and extensions
 __pycache__/
 *.py[cod]
 *.pyd
 *.so
 
-# Virtual environments
-.venv/
-venv/
-env/
-.env
-
-# Build artefacts (keep helper scripts)
-dist/
-build/output/
-build/cache/
-build/pyinstaller/
-build/*.log
-
-# PyInstaller manifests
-*.manifest
-
-# Archives
+# Binary artefacts (must never be committed)
+/resources/ffmpeg/*.exe
+/resources/ffmpeg/*.dll
+*.exe
+*.dll
+*.pyd
 *.zip
 *.7z
-*.rar
 *.tar
 *.gz
 *.xz
+*.rar
+*.whl
+*.bin
+*.lib
+*.dylib
+*.a
+*.iso
+*.img
 
-# Audio/video/media
+# Media and models
 *.wav
 *.mp3
 *.flac
@@ -39,29 +43,25 @@ build/*.log
 *.mkv
 *.mov
 *.avi
-
-# Machine learning models / binaries
 *.onnx
 *.pt
 *.pth
 *.safetensors
-*.exe
-*.dll
-*.bin
-*.lib
-*.dylib
-*.a
-*.whl
-*.iso
-*.img
 
 # Runtime downloads
 models/
 cache/
-
-# Local tools
 resources/ffmpeg/*
 !resources/ffmpeg/.gitkeep
+
+# Tooling
+build/output/
+build/cache/
+build/pyinstaller/
+build/*.log
+
+# PyInstaller manifests
+*.manifest
 
 # OS / IDE
 .DS_Store
