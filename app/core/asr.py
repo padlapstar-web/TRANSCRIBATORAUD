@@ -5,7 +5,7 @@ import importlib.util
 import string
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, Iterator, List, Optional, Tuple
 
 from app.core import models
 from app.core.logging import setup_logging
@@ -65,7 +65,7 @@ def _instantiate_model(model_name: str, device: str, compute_type: str) -> Whisp
     return WhisperModel(source, device=device, compute_type=compute_type)
 
 
-def _iter_words(segments: Iterable[object], keep_punct: bool) -> Iterable[Word]:
+def _iter_words(segments: Iterable[object], keep_punct: bool) -> Iterator[Word]:
     punctuation_table = None if keep_punct else _punctuation_table()
     index = 1
     for segment in segments:
@@ -85,6 +85,11 @@ def _iter_words(segments: Iterable[object], keep_punct: bool) -> Iterable[Word]:
             yield Word(index=index, start=start, end=end, word=word_text, probability=probability)
             index += 1
 
+
+def segments_to_words(segments: Iterable[object], keep_punct: bool) -> Iterator[Word]:
+    """Convert faster-whisper segments into :class:`Word` instances."""
+
+    return _iter_words(segments, keep_punct)
 
 def _should_retry_on_cpu(error: Exception) -> bool:
     message = str(error).lower()

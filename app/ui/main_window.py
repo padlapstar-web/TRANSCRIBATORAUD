@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
-from app.core.batch import BatchOptions, BatchResult, discover_inputs, process_batch
+from app.core.batch import discover_inputs
 from app.core.logging import setup_logging
 from app.core.ffmpeg import find_ffmpeg
+from app.core.worker import JobConfig, TranscribeWorker
 
 try:  # pragma: no cover - optional dependency at runtime
     from PySide6 import QtCore, QtGui, QtWidgets
@@ -34,105 +35,6 @@ if QtWidgets is None or QtCore is None or QtGui is None:  # pragma: no cover
 
 else:
 
-    class TranscriptionWorker(QtCore.QObject):
-        """Background worker that performs batch transcription."""
-
-        progress = QtCore.Signal(int)
-        message = QtCore.Signal(str)
-        finished = QtCore.Signal(bool)
-
-        def __init__(
-            self,
-            source: str,
-            recursive: bool,
-            output_dir: Path,
-            formats: Iterable[str],
-            model: str,
-            device: str,
-            compute_type: str,
-            language: str,
-            parent: Optional[QtCore.QObject] = None,
-        ) -> None:
-            super().__init__(parent)
-            self._source = Path(source)
-            self._recursive = recursive
-            self._output_dir = Path(output_dir)
-            self._formats = list(formats)
-            self._model = model
-            self._device = device
-            self._compute_type = compute_type
-            self._language = language
-
-        @QtCore.Slot()
-        def run(self) -> None:
-            try:
-                inputs = discover_inputs(self._source, recursive=self._recursive)
-                if not inputs:
-                    raise ValueError("Не найдено аудиофайлов для заданного пути")
-
-                self._output_dir.mkdir(parents=True, exist_ok=True)
-
-                options = BatchOptions(
-                    output_dir=self._output_dir,
-                    formats=list(self._formats),
-                    model=self._model,
-                    device=self._device,
-                    compute_type=self._compute_type,
-                    language=None if self._language.lower() == "auto" else self._language,
-                    keep_punct=True,
-                    vad=False,
-                    beam_size=5,
-                    parallel=1,
-                    skip_existing=False,
-                )
-
-                total = len(inputs)
-                processed = 0
-
-                def _emit_status(message: str) -> None:
-                    self.message.emit(message)
-                    _LOGGER.info(message)
-
-                _emit_status(f"Найдено файлов для обработки: {total}")
-
-                def _progress(path: Path, status: str) -> None:
-                    nonlocal processed
-                    if status == "queued":
-                        _emit_status(f"В очереди: {path.name}")
-                    elif status == "processing":
-                        _emit_status(f"Обработка: {path.name}")
-                    elif status in {"completed", "failed", "skipped"}:
-                        processed += 1
-                        percent = int(processed * 100 / max(total, 1))
-                        self.progress.emit(percent)
-                        _emit_status(f"{status.upper()}: {path.name}")
-
-                results = process_batch(inputs, options, progress=_progress)
-
-                failures = [result for result in results if not result.success]
-                self._report_results(results)
-                self.progress.emit(100)
-                self.finished.emit(not failures)
-            except Exception as exc:  # pragma: no cover - defensive branch for GUI usage
-                self.message.emit(f"Ошибка: {exc}")
-                _LOGGER.exception("GUI batch processing failed")
-                self.finished.emit(False)
-
-        def _report_results(self, results: List[BatchResult]) -> None:
-            for item in results:
-                if item.success:
-                    exported = ", ".join(
-                        f"{fmt} → {path.name}" for fmt, path in item.outputs.items()
-                    )
-                    self.message.emit(f"✔ {item.source.name}: {exported}")
-                elif item.status == "skipped":
-                    self.message.emit(f"↷ {item.source.name}: пропущен (файлы уже существуют)")
-                else:
-                    self.message.emit(
-                        f"✖ {item.source.name}: {item.error or 'ошибка обработки'}"
-                    )
-
-
     class MainWindow(QtWidgets.QMainWindow):
         """Main GUI window for TRANSCRIBATORAUD."""
 
@@ -141,9 +43,10 @@ else:
             self.setWindowTitle("TRANSCRIBATORAUD")
             self.resize(900, 640)
 
-            self._thread: Optional[QtCore.QThread] = None
-            self._worker: Optional[TranscriptionWorker] = None
+            self._worker: Optional[TranscribeWorker] = None
             self._ffmpeg_checked = False
+            self._ffmpeg_path: Optional[Path] = None
+            self._worker_had_errors = False
 
             self._build_ui()
             self._ensure_output_dir()
@@ -248,9 +151,9 @@ else:
                 self._check_ffmpeg()
 
         def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
-            if self._thread and self._thread.isRunning():
-                self._thread.quit()
-                self._thread.wait(3000)
+            if self._worker and self._worker.isRunning():
+                self._worker.stop()
+                self._worker.wait(3000)
             super().closeEvent(event)
 
         def _choose_input(self) -> None:
@@ -287,9 +190,9 @@ else:
                 self._append_log(f"Не удалось создать папку вывода: {exc}")
 
         def _check_ffmpeg(self) -> None:
-            ffmpeg_path = find_ffmpeg()
-            if ffmpeg_path:
-                self._append_log(f"FFmpeg обнаружен: {ffmpeg_path}")
+            self._ffmpeg_path = find_ffmpeg()
+            if self._ffmpeg_path:
+                self._append_log(f"FFmpeg обнаружен: {self._ffmpeg_path}")
             else:
                 self._append_log(
                     "FFmpeg не найден. Установите ffmpeg и добавьте его в PATH или переменные окружения."
@@ -304,7 +207,7 @@ else:
             self.run_button.setEnabled(enabled)
 
         def _start_transcription(self) -> None:
-            if self._thread and self._thread.isRunning():
+            if self._worker and self._worker.isRunning():
                 QtWidgets.QMessageBox.information(
                     self,
                     "Транскрибация",
@@ -332,51 +235,74 @@ else:
 
             output_dir = Path(self.output_edit.text().strip() or DEFAULT_OUTPUT_DIR)
 
-            self._append_log("Запуск транскрибации…")
+            if not self._ffmpeg_path or not self._ffmpeg_path.exists():
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "FFmpeg",
+                    "FFmpeg не найден. Установите ffmpeg и повторите попытку.",
+                )
+                return
+
+            inputs = discover_inputs(Path(source), recursive=self.recursive_checkbox.isChecked())
+            if not inputs:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Транскрибация",
+                    "Не найдено аудиофайлов для заданного пути.",
+                )
+                return
+
+            self._append_log("Запуск транскрибации (последовательный режим)…")
             self.progress_bar.setValue(0)
             self._set_controls_enabled(False)
 
-            self._thread = QtCore.QThread(self)
-            self._worker = TranscriptionWorker(
-                source=source,
-                recursive=self.recursive_checkbox.isChecked(),
-                output_dir=output_dir,
+            config = JobConfig(
+                ffmpeg=self._ffmpeg_path,
+                files=inputs,
                 formats=formats,
-                model=self.model_combo.currentText(),
+                model_name=self.model_combo.currentText(),
                 device=self.device_combo.currentText(),
                 compute_type=self.compute_combo.currentText(),
                 language=self.language_combo.currentText(),
+                output_dir=output_dir,
+                beam_size=1,
             )
-            self._worker.moveToThread(self._thread)
-            self._thread.started.connect(self._worker.run)
+
+            self._worker_had_errors = False
+            self._worker = TranscribeWorker(config, self)
+            self._worker.log.connect(self._append_log)
             self._worker.progress.connect(self.progress_bar.setValue)
-            self._worker.message.connect(self._append_log)
-            self._worker.finished.connect(self._on_transcription_finished)
-            self._worker.finished.connect(self._thread.quit)
-            self._worker.finished.connect(self._worker.deleteLater)
-            self._thread.finished.connect(self._thread.deleteLater)
-            self._thread.finished.connect(self._clear_thread_references)
-            self._thread.start()
+            self._worker.done_file.connect(lambda p: self._append_log(f"Готово: {Path(p).name}"))
+            self._worker.error.connect(self._handle_worker_error)
+            self._worker.finished_all.connect(self._on_worker_finished)
+            self._worker.start()
 
-        def _clear_thread_references(self) -> None:
-            self._thread = None
-            self._worker = None
+        def _handle_worker_error(self, message: str) -> None:
+            first_error = not self._worker_had_errors
+            self._worker_had_errors = True
+            self._append_log(message)
+            if first_error:
+                QtWidgets.QMessageBox.critical(self, "Ошибка", message)
 
-        def _on_transcription_finished(self, success: bool) -> None:
+        def _on_worker_finished(self) -> None:
             self._set_controls_enabled(True)
-            if success:
-                self._append_log("Готово: все файлы обработаны успешно")
-                QtWidgets.QMessageBox.information(
-                    self,
-                    "Транскрибация",
-                    "Обработка завершена успешно.",
-                )
-            else:
+            self.progress_bar.setValue(100)
+            if self._worker:
+                self._worker.deleteLater()
+            self._worker = None
+            if self._worker_had_errors:
                 self._append_log("Выполнено с ошибками. Проверьте лог выше.")
                 QtWidgets.QMessageBox.warning(
                     self,
                     "Транскрибация",
                     "Обработка завершилась с ошибками. Детали см. в логе.",
+                )
+            else:
+                self._append_log("Готово: все файлы обработаны успешно")
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Транскрибация",
+                    "Обработка завершена успешно.",
                 )
 
 
