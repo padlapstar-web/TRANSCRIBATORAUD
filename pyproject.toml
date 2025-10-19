@@ -19,6 +19,7 @@ dependencies = [
     "requests",
     "huggingface-hub[hf_xet]>=0.23",
     "hf-transfer>=0.1",
+    "filelock",
 ]
 
 [project.optional-dependencies]

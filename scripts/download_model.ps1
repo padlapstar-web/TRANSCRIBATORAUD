@@ -4,7 +4,7 @@ param(
 )
 
 $env:HUGGINGFACE_HUB_CACHE = "$env:LOCALAPPDATA\TranscribatorAud\hf_cache"
-$env:HF_HUB_ENABLE_HF_TRANSFER = "1"
+$env:HF_HUB_ENABLE_HF_TRANSFER = "0"
 
 Write-Host "Downloading $RepoId -> $OutDir"
 python - <<'PY'

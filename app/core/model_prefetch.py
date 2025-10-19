@@ -3,9 +3,11 @@ import json
 import os
 import logging
 import shutil
+import time
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Optional, Sequence, Tuple
 
+from filelock import FileLock
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 from requests import HTTPError
 
@@ -31,6 +33,100 @@ _REQUIRED_TOKENS = {
 }
 
 _HF_API = HfApi()
+_LOCK_TIMEOUT = 600
+_DOWNLOAD_PATTERNS = [
+    "config.json",
+    "model.bin",
+    "model.bin.*",
+    "tokenizer.json",
+    "vocabulary.json",
+    "vocabulary.txt",
+]
+
+
+def _expand(path: Path | str) -> Path:
+    return Path(os.path.abspath(os.path.expanduser(os.path.expandvars(str(path)))))
+
+
+def _download_lock(target_dir: Path) -> FileLock:
+    return FileLock(str(target_dir / ".download.lock"), timeout=_LOCK_TIMEOUT)
+
+
+def _disable_hf_transfer_env() -> None:
+    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
+
+
+def _is_file_in_use_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "os error 32" in message
+        or "being used by another process" in message
+        or "hf_transfer" in message
+    )
+
+
+def _cleanup_cache_artifacts() -> None:  # pragma: no cover - best effort cleanup
+    root = Path(os.getenv("HF_HOME") or Path.home() / ".cache" / "huggingface")
+    download_dir = root / "downloads"
+    if not download_dir.exists():
+        return
+    for suffix in (".lock", ".incomplete"):
+        for candidate in download_dir.rglob(f"*{suffix}"):
+            try:
+                candidate.unlink()
+            except Exception:
+                continue
+
+
+def _safe_hf_download(repo_id: str, filename: str, dst_dir: Path) -> str:
+    dst_dir = _expand(dst_dir)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for attempt in (1, 2):
+        with _download_lock(dst_dir):
+            try:
+                path = hf_hub_download(
+                    repo_id=repo_id,
+                    filename=filename,
+                    local_dir=str(dst_dir),
+                    local_dir_use_symlinks=False,
+                    resume_download=True,
+                    use_hf_transfer=False,
+                )
+                _cleanup_cache_artifacts()
+                return path
+            except Exception as exc:
+                if attempt == 2 or not _is_file_in_use_error(exc):
+                    raise
+        _disable_hf_transfer_env()
+        time.sleep(2)
+    raise RuntimeError("unreachable")
+
+
+def _safe_snapshot(repo_id: str, dst_dir: Path, force_download: bool) -> str:
+    dst_dir = _expand(dst_dir)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for attempt in (1, 2):
+        with _download_lock(dst_dir):
+            try:
+                path = snapshot_download(
+                    repo_id=repo_id,
+                    local_dir=str(dst_dir),
+                    local_dir_use_symlinks=False,
+                    allow_patterns=_DOWNLOAD_PATTERNS,
+                    resume_download=True,
+                    force_download=force_download,
+                    max_workers=1,
+                    use_hf_transfer=False,
+                    tqdm_class=None,
+                )
+                _cleanup_cache_artifacts()
+                return path
+            except Exception as exc:
+                if attempt == 2 or not _is_file_in_use_error(exc):
+                    raise
+        _disable_hf_transfer_env()
+        time.sleep(2)
+    raise RuntimeError("unreachable")
 
 
 def _status_callback(cb: Optional[Callable[[str], None]], message: str) -> None:
@@ -250,25 +346,13 @@ def _rebuild_vocabulary(local_dir: Path) -> bool:
 
 def _download_vocabulary(repo_id: str, local_dir: Path) -> None:
     try:
-        hf_hub_download(
-            repo_id=repo_id,
-            filename="vocabulary.json",
-            local_dir=str(local_dir),
-            local_dir_use_symlinks=False,
-            resume_download=True,
-        )
+        _safe_hf_download(repo_id, "vocabulary.json", local_dir)
         return
     except HTTPError as exc:
         if exc.response is None or exc.response.status_code != 404:
             raise
         log.info("vocabulary.json not available upstream; trying vocabulary.txt")
-    hf_hub_download(
-        repo_id=repo_id,
-        filename="vocabulary.txt",
-        local_dir=str(local_dir),
-        local_dir_use_symlinks=False,
-        resume_download=True,
-    )
+    _safe_hf_download(repo_id, "vocabulary.txt", local_dir)
 
 
 def _redownload_problem_files(
@@ -282,16 +366,9 @@ def _redownload_problem_files(
 
     if bins_required:
         _status_callback(status_cb, "Повторная загрузка бинарных файлов модели…")
-        _remove_patterns(local_dir, [_MODEL_BIN_PATTERN])
-        snapshot_download(
-            repo_id=repo_id,
-            local_dir=str(local_dir),
-            local_dir_use_symlinks=False,
-            allow_patterns=["model.bin", "model.bin.*"],
-            resume_download=True,
-            max_workers=4,
-            tqdm_class=None,
-        )
+        with _download_lock(local_dir):
+            _remove_patterns(local_dir, [_MODEL_BIN_PATTERN])
+        _safe_snapshot(repo_id, local_dir, force_download=False)
 
     for name in problematic:
         if name.startswith("model.bin") or name == _MODEL_BIN_PATTERN:
@@ -316,13 +393,7 @@ def _redownload_problem_files(
             except Exception:
                 pass
         try:
-            hf_hub_download(
-                repo_id=repo_id,
-                filename=name,
-                local_dir=str(local_dir),
-                local_dir_use_symlinks=False,
-                resume_download=True,
-            )
+            _safe_hf_download(repo_id, name, local_dir)
         except HTTPError as exc:
             if name in VOCABULARY_CANDIDATES and exc.response is not None and exc.response.status_code == 404:
                 log.warning("%s missing upstream; attempting alternative vocabulary download", name)
@@ -343,10 +414,10 @@ def ensure_model(
     force_files: Optional[Sequence[str]] = None,
 ) -> str:
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
     os.environ.setdefault("HF_HUB_ENABLE_XET", "1")
 
-    local_path = Path(local_dir)
+    local_path = _expand(local_dir)
     local_path.mkdir(parents=True, exist_ok=True)
 
     revision: Optional[str] = None
@@ -358,7 +429,30 @@ def ensure_model(
 
     if force_files:
         _status_callback(on_status, "Повторная загрузка выбранных файлов модели…")
-        _remove_patterns(local_path, force_files)
+        with _download_lock(local_path):
+            _remove_patterns(local_path, force_files)
+        needs_vocab = any(name in VOCABULARY_CANDIDATES for name in force_files)
+        for name in force_files:
+            if name in VOCABULARY_CANDIDATES:
+                continue
+            if name.startswith("model.bin") or name == _MODEL_BIN_PATTERN:
+                _safe_snapshot(repo_id, local_path, force_download=False)
+                continue
+            try:
+                _safe_hf_download(repo_id, name, local_path)
+            except HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 404:
+                    raise
+                raise
+        if needs_vocab:
+            try:
+                _download_vocabulary(repo_id, local_path)
+            except HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 404:
+                    if not _rebuild_vocabulary(local_path):
+                        raise
+                else:
+                    raise
 
     if on_progress:
         try:
@@ -368,15 +462,8 @@ def ensure_model(
 
     _status_callback(on_status, "Подключение к Hugging Face…")
 
-    snapshot_download(
-        repo_id=repo_id,
-        local_dir=str(local_path),
-        local_dir_use_symlinks=False,
-        allow_patterns=FILES,
-        resume_download=True,
-        max_workers=4,
-        tqdm_class=None,
-    )
+    if not force_files:
+        _safe_snapshot(repo_id, local_path, force_download=False)
 
     attempts = 0
     full_refresh_performed = False
@@ -390,23 +477,16 @@ def ensure_model(
             continue
         if not full_refresh_performed:
             _status_callback(on_status, "Полная повторная загрузка модели…")
-            for entry in local_path.iterdir():
-                if entry.is_file():
-                    try:
-                        entry.unlink()
-                    except Exception:
-                        pass
-                else:
-                    shutil.rmtree(entry, ignore_errors=True)
-            snapshot_download(
-                repo_id=repo_id,
-                local_dir=str(local_path),
-                local_dir_use_symlinks=False,
-                allow_patterns=FILES,
-                resume_download=False,
-                max_workers=4,
-                tqdm_class=None,
-            )
+            with _download_lock(local_path):
+                for entry in local_path.iterdir():
+                    if entry.is_file():
+                        try:
+                            entry.unlink()
+                        except Exception:
+                            pass
+                    else:
+                        shutil.rmtree(entry, ignore_errors=True)
+            _safe_snapshot(repo_id, local_path, force_download=True)
             full_refresh_performed = True
             continue
         details = ", ".join(f"{name}: {reason}" for name, reason in issues.items())
