@@ -1,117 +1,100 @@
-"""Model download helper with progress callbacks."""
-from __future__ import annotations
-
-import logging
 import os
-import time
-from pathlib import Path
+import logging
 from typing import Callable, Optional
-
 from huggingface_hub import snapshot_download
-
-from app.core.paths import HF_CACHE
 
 log = logging.getLogger(__name__)
 
-TRACKED_FILES = ["model.bin", "model.bin.*", "tokenizer.json", "config.json", "README.md"]
-
-StatusCallback = Optional[Callable[[str], None]]
-ProgressCallback = Optional[Callable[[int, int], None]]
+# Порядок нужных файлов в снэпшоте
+FILES = ["model.bin", "tokenizer.json", "config.json", "README.md"]
 
 
-def _bytes_fmt(value: int) -> str:
-    units = ["B", "KB", "MB", "GB", "TB", "PB"]
-    size = float(value)
-    for unit in units:
-        if size < 1024 or unit == units[-1]:
-            return f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} PB"
+def _make_tqdm_class(on_progress: Optional[Callable[[int, int], None]]):
+    """
+    Возвращает корректный tqdm_class для huggingface_hub.
+    Класс (НЕ инстанс!), с update/close, контекст-менеджером и write().
+    По update(...) прокидываем прогресс в UI.
+    """
+    if on_progress is None:
+        return None  # пусть hub сам выберет дефолтный tqdm
+
+    class UiTqdm:
+        def __init__(self, total: Optional[int] = None, **kwargs):
+            self.total = int(total or 0)
+            self.n = 0
+
+        # то, на что рассчитывает hub при логах
+        @classmethod
+        def write(cls, s: str, **kwargs):
+            # без вывода — все сообщения видны в нашем логе
+            log.debug(str(s))
+
+        def update(self, n: int = 1):
+            self.n += int(n or 0)
+            if self.total > 0:
+                try:
+                    on_progress(self.n, self.total)
+                except Exception:  # не роняем загрузку из-за UI
+                    log.exception("progress callback failed")
+
+        def close(self):
+            pass
+
+        # контекст-менеджер
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+            return False
+
+    return UiTqdm
 
 
 def ensure_model(
     repo_id: str,
     local_dir: str,
-    on_status: StatusCallback = None,
-    on_progress: ProgressCallback = None,
+    on_status: Optional[Callable[[str], None]] = None,
+    on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> str:
-    """Ensure that the requested model snapshot exists locally and report progress."""
-
-    path = Path(local_dir).expanduser().resolve()
-    path.mkdir(parents=True, exist_ok=True)
-
-    if on_status:
-        on_status(f"Проверка модели {repo_id}…")
-
-    if os.environ.get("HF_HUB_ENABLE_HF_TRANSFER") != "1":
-        log.warning("hf_transfer не включен; установите HF_HUB_ENABLE_HF_TRANSFER=1 для ускорения.")
-
+    # ускорители скачивания
     os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
-    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(HF_CACHE))
-    if "HUGGINGFACE_HUB_CACHE" in os.environ:
-        cache_info = os.environ["HUGGINGFACE_HUB_CACHE"]
-        log.debug("Using HF cache: %s", cache_info)
+    os.environ.setdefault("HF_HUB_ENABLE_XET", "1")
 
-    total_bytes = 0
-    downloaded_bytes = 0
+    os.makedirs(local_dir, exist_ok=True)
 
-    def _tqdm_factory(*_args, **kwargs):
-        class _Reporter:
-            def __init__(self, total=None, **_kw):
-                nonlocal total_bytes
-                try:
-                    total_bytes = int(total or 0)
-                except (TypeError, ValueError):
-                    total_bytes = 0
+    def _status(msg: str):
+        if on_status:
+            try:
+                on_status(msg)
+            except Exception:
+                log.exception("status callback failed")
+        log.info(msg)
 
-            def update(self, n):
-                nonlocal downloaded_bytes
-                try:
-                    delta = int(n or 0)
-                except (TypeError, ValueError):
-                    delta = 0
-                downloaded_bytes += delta
-                if on_progress:
-                    on_progress(downloaded_bytes, total_bytes)
+    _status("Подключение к Hugging Face…")
 
-            def close(self):
-                pass
+    try:
+        path = snapshot_download(
+            repo_id=repo_id,
+            local_dir=local_dir,
+            local_dir_use_symlinks=False,
+            allow_patterns=FILES,
+            resume_download=True,
+            max_workers=4,
+            tqdm_class=_make_tqdm_class(on_progress),
+        )
+    except Exception as e:
+        log.exception("snapshot_download failed")
+        raise
 
-        return _Reporter(total=kwargs.get("total"))
-
-    start = time.time()
-    log.info("Prefetch model: repo_id=%s → %s", repo_id, path)
-    if on_status:
-        on_status("Подключение к Hugging Face…")
-
-    snapshot_path = snapshot_download(
-        repo_id=repo_id,
-        local_dir=str(path),
-        local_dir_use_symlinks=False,
-        allow_patterns=TRACKED_FILES,
-        resume_download=True,
-        max_workers=4,
-        tqdm_class=_tqdm_factory,
-    )
-
-    required_patterns = ["model.bin", "model.bin.*", "tokenizer.json", "config.json"]
-    missing: list[str] = []
-    snapshot_root = Path(snapshot_path)
-    for pattern in required_patterns:
-        if "*" in pattern:
-            if not any(snapshot_root.glob(pattern)):
-                missing.append(pattern)
-        else:
-            if not (snapshot_root / pattern).is_file():
-                missing.append(pattern)
+    # контроль целостности
+    missing = [
+        f for f in ("model.bin", "tokenizer.json", "config.json")
+        if not os.path.isfile(os.path.join(path, f))
+    ]
     if missing:
-        raise RuntimeError(f"Модель скачана не полностью, отсутствуют: {', '.join(missing)}")
+        raise RuntimeError(
+            "Модель скачана не полностью: " + ", ".join(missing)
+        )
 
-    elapsed = time.time() - start
-    size_on_disk = sum(f.stat().st_size for f in Path(snapshot_path).rglob("*") if f.is_file())
-    log.info("Model ready at %s (%s) за %.1f с", snapshot_path, _bytes_fmt(size_on_disk), elapsed)
-    if on_status:
-        on_status(f"Модель готова ({_bytes_fmt(size_on_disk)} за {elapsed:.1f}с)")
-    if on_progress:
-        on_progress(downloaded_bytes or size_on_disk, total_bytes or size_on_disk)
-    return str(snapshot_path)
+    return path

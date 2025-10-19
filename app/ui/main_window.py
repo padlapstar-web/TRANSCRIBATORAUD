@@ -44,7 +44,7 @@ else:
     class ModelPrefetchThread(QtCore.QThread):
         finished = QtCore.Signal(bool, str)
         status = QtCore.Signal(str)
-        progress = QtCore.Signal(int)
+        progress = QtCore.Signal(int, int)
 
         def __init__(self, model_selector: str, parent: Optional[QtCore.QObject] = None) -> None:
             super().__init__(parent)
@@ -61,8 +61,7 @@ else:
                     self.status.emit(message)
 
                 def _progress(done: int, total: int) -> None:
-                    percent = int(done * 100 / total) if total else 0
-                    self.progress.emit(max(0, min(100, percent)))
+                    self.progress.emit(int(done), int(total))
 
                 local_path = ensure_model(
                     repo_id,
@@ -70,10 +69,11 @@ else:
                     on_status=_status,
                     on_progress=_progress,
                 )
-                self.progress.emit(100)
                 self.finished.emit(True, str(local_path))
-            except Exception as exc:  # pragma: no cover - network/filesystem issues
-                self.finished.emit(False, str(exc))
+            except Exception:  # pragma: no cover - network/filesystem issues
+                import traceback
+
+                self.finished.emit(False, traceback.format_exc())
 
 
     class MainWindow(QtWidgets.QMainWindow):
@@ -195,6 +195,7 @@ else:
             # Progress and log
             self.progress_bar = QtWidgets.QProgressBar()
             self.progress_bar.setRange(0, 100)
+            self.progress_bar.setVisible(False)
             layout.addWidget(self.progress_bar)
 
             self.log_output = QtWidgets.QPlainTextEdit()
@@ -343,15 +344,21 @@ else:
             self._showing_download_progress = enabled
             if enabled:
                 self.progress_bar.setRange(0, 100)
+                self.progress_bar.setVisible(True)
             elif not (self._worker and self._worker.isRunning()):
                 self.progress_bar.setRange(0, 100)
+                self.progress_bar.setVisible(False)
 
         def _handle_prefetch_status(self, message: str) -> None:
             self._append_log(message)
             self._update_status(message)
 
-        def _handle_prefetch_progress(self, percent: int) -> None:
+        def _handle_prefetch_progress(self, done: int, total: int) -> None:
             self._set_download_progress_mode(True)
+            if total > 0:
+                percent = max(0, min(100, int(done * 100 / total)))
+            else:
+                percent = 0
             self.progress_bar.setValue(percent)
 
         def _cancel_transcription(self) -> None:
@@ -372,8 +379,10 @@ else:
             self.prefetch_button.setEnabled(False)
             logging.getLogger("huggingface_hub").setLevel(logging.INFO)
             logging.getLogger("app.core.model_prefetch").setLevel(logging.INFO)
-            self._set_download_progress_mode(True)
+            self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
+            self.progress_bar.setVisible(True)
+            self._set_download_progress_mode(True)
             self._prefetch_thread = ModelPrefetchThread(selector, self)
             self._prefetch_thread.status.connect(self._handle_prefetch_status)
             self._prefetch_thread.progress.connect(self._handle_prefetch_progress)
@@ -388,9 +397,11 @@ else:
                 thread.deleteLater()
             self._set_download_progress_mode(False)
             if not (self._worker and self._worker.isRunning()):
+                self.progress_bar.setVisible(False)
                 self.progress_bar.setValue(0)
             if success:
                 self.prefetch_status.setChecked(True)
+                self.progress_bar.setValue(100)
                 self._append_log(f"Модель загружена: {payload}")
                 self._update_status("Модель готова локально", 5000)
                 QtWidgets.QMessageBox.information(
@@ -400,12 +411,13 @@ else:
                 )
             else:
                 self.prefetch_status.setChecked(False)
-                self._append_log(f"Ошибка загрузки модели: {payload}")
+                self._append_log("Ошибка загрузки модели")
+                self._append_log(payload)
                 self._update_status("Ошибка загрузки модели", 5000)
                 QtWidgets.QMessageBox.critical(
                     self,
                     "Загрузка модели",
-                    f"Не удалось загрузить модель: {payload}",
+                    f"Не удалось загрузить модель. Подробности в консоли.",
                 )
 
         def _start_transcription(self) -> None:
