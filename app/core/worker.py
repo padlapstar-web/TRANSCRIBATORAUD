@@ -17,7 +17,7 @@ from faster_whisper import WhisperModel
 
 from app.core.asr import Word, segments_to_words
 from app.core.exporter import EXPORTERS, normalise_formats
-from app.core.model_prefetch import ensure_model
+from app.core.model_prefetch import ensure_model, validate_snapshot
 from app.core.models import resolve_repo_id
 from app.core.paths import MODELS_DIR
 from app.diagnostics.runtime_info import dump_runtime_info
@@ -34,9 +34,6 @@ except ImportError:  # pragma: no cover - GUI not installed in some environments
 __all__ = ["JobConfig", "TranscribeWorker", "load_whisper"]
 
 LOGGER = logging.getLogger(__name__)
-_REQUIRED_LOCAL_FILES = ("config.json", "tokenizer.json")
-
-
 class CancelledError(RuntimeError):
     """Raised when the user cancels the running job."""
 
@@ -61,14 +58,10 @@ def _gpu_name() -> str:
 
 
 def _validate_local_model_dir(path: Path) -> Path:
-    if not path.exists() or not path.is_dir():
-        raise FileNotFoundError(f"Model directory not found: {path}")
-    if not list(path.glob("model.bin*")):
-        raise FileNotFoundError(f"model.bin* not found in {path}")
-    for required in _REQUIRED_LOCAL_FILES:
-        candidate = path / required
-        if not candidate.exists():
-            raise FileNotFoundError(f"{required} missing in {path}")
+    ok, issues = validate_snapshot(path)
+    if not ok:
+        details = ', '.join(f"{name}: {reason}" for name, reason in issues.items()) or 'unknown error'
+        raise FileNotFoundError(f"Model directory invalid: {path} ({details})")
     return path
 
 
@@ -135,7 +128,10 @@ def load_whisper(
         )
 
     if progress_cb:
-        progress_cb(1, 1)  # mark completion for zero-length downloads
+        try:
+            progress_cb(1, 1)
+        except Exception:
+            LOGGER.exception("progress callback failed")
 
     def _attempt(device: str, compute: str) -> WhisperModel:
         if status_cb:
@@ -175,23 +171,42 @@ def load_whisper(
     attempts.append(("cpu", compute_type_cpu))
 
     last_error: Exception | None = None
+    repair_attempted = False
     for device_name, compute_name in attempts:
-        try:
-            model = _attempt(device_name, compute_name)
-            descriptor = _gpu_name() if device_name == "cuda" else "CPU"
-            LOGGER.info("Model initialised using %s/%s (%s)", device_name, compute_name, descriptor)
-            if status_cb:
-                status_cb("Модель инициализирована.")
-            return model, device_name, compute_name, model_dir
-        except Exception as exc:
-            last_error = exc
-            LOGGER.warning("Failed to initialise Whisper on %s/%s: %s", device_name, compute_name, exc)
-            if device_name == "cuda" and status_cb:
-                status_cb("CUDA недоступна, переключаемся на CPU…")
+        while True:
+            try:
+                model = _attempt(device_name, compute_name)
+                descriptor = _gpu_name() if device_name == "cuda" else "CPU"
+                LOGGER.info("Model initialised using %s/%s (%s)", device_name, compute_name, descriptor)
+                if status_cb:
+                    status_cb("Модель инициализирована.")
+                return model, device_name, compute_name, model_dir
+            except Exception as exc:
+                last_error = exc
+                LOGGER.warning("Failed to initialise Whisper on %s/%s: %s", device_name, compute_name, exc)
+                message = str(exc).lower()
+                tokenizer_issue = any(key in message for key in ("vocabulary", "tokenizer", "tokeniser"))
+                if allow_download and not repair_attempted and tokenizer_issue:
+                    LOGGER.warning("Tokenizer validation failed during init; refreshing local files.")
+                    if status_cb:
+                        status_cb("Повреждён токенизатор модели, выполняем повторную загрузку…")
+                    model_dir = Path(
+                        ensure_model(
+                            repo_id,
+                            str(model_dir),
+                            on_status=status_cb,
+                            on_progress=progress_cb,
+                            force_files=("tokenizer.json", "config.json"),
+                        )
+                    )
+                    repair_attempted = True
+                    continue
+                if device_name == "cuda" and status_cb:
+                    status_cb("CUDA недоступна, переключаемся на CPU…")
+                break
 
     assert last_error is not None
     raise last_error
-
 
 @dataclass(slots=True)
 class JobConfig:
