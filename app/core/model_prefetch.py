@@ -7,6 +7,9 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Optional, Sequence, Tuple
 
+os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
 from filelock import FileLock
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 from requests import HTTPError
@@ -25,12 +28,12 @@ FILES = [
 _MODEL_BIN_PATTERN = "model.bin*"
 _REQUIRED_JSON = ("config.json", "tokenizer.json")
 VOCABULARY_CANDIDATES: Tuple[str, ...] = ("vocabulary.json", "vocabulary.txt")
-_REQUIRED_TOKENS = {
+_SPECIAL_TOKENS = (
     "<|startoftranscript|>",
     "<|endoftext|>",
     "<|nospeech|>",
     "<|notimestamps|>",
-}
+)
 
 _HF_API = HfApi()
 _LOCK_TIMEOUT = 600
@@ -164,23 +167,35 @@ def _load_json(path: Path) -> Tuple[Optional[dict], Optional[str]]:
     return data, None
 
 
-def _validate_tokenizer(path: Path) -> Optional[str]:
+def _validate_tokenizer(path: Path) -> Tuple[Optional[str], Sequence[str]]:
     data, error = _load_json(path)
     if data is None:
-        return f"invalid JSON ({error})" if error else "invalid JSON"
+        return (f"invalid JSON ({error})" if error else "invalid JSON", tuple())
+
     model = data.get("model")
     if not isinstance(model, dict):
-        return "tokenizer.json missing 'model' section"
+        return ("tokenizer.json missing 'model' section", tuple())
+
     vocab = model.get("vocab")
     if not isinstance(vocab, dict):
-        return "tokenizer.json missing vocab"
-    missing_tokens = sorted(token for token in _REQUIRED_TOKENS if token not in vocab)
-    if missing_tokens:
-        return "missing tokens: " + ", ".join(missing_tokens)
+        return ("tokenizer.json missing vocab", tuple())
+
     merges = model.get("merges")
     if not isinstance(merges, list) or not merges:
-        return "tokenizer.json missing merges"
-    return None
+        return ("tokenizer.json missing merges", tuple())
+
+    missing: list[str] = []
+    try:
+        from tokenizers import Tokenizer  # type: ignore
+
+        tokenizer = Tokenizer.from_file(str(path))
+        for token in _SPECIAL_TOKENS:
+            if tokenizer.token_to_id(token) is None:
+                missing.append(token)
+    except Exception:
+        missing = [token for token in _SPECIAL_TOKENS if token not in vocab]
+
+    return None, tuple(missing)
 
 
 def _normalise_vocabulary_payload(tokenizer_data: dict) -> dict:
@@ -211,18 +226,15 @@ def _validate_vocabulary_json(path: Path) -> Optional[str]:
     data, error = _load_json(path)
     if data is None:
         return f"invalid JSON ({error})" if error else "invalid JSON"
+
     model_section = data.get("model")
     if not isinstance(model_section, dict):
         return "vocabulary.json missing model section"
+
     vocab = model_section.get("vocab") or model_section.get("vocabulary")
     if not isinstance(vocab, dict) or not vocab:
         return "vocabulary.json missing vocab"
-    merges = model_section.get("merges")
-    if not isinstance(merges, list) or not merges:
-        return "vocabulary.json missing merges"
-    missing_tokens = sorted(token for token in _REQUIRED_TOKENS if token not in vocab)
-    if missing_tokens:
-        return "missing tokens: " + ", ".join(missing_tokens)
+
     return None
 
 
@@ -233,9 +245,6 @@ def _validate_vocabulary_txt(path: Path) -> Optional[str]:
         return f"read error: {exc}"
     if not content.strip():
         return "empty"
-    missing_tokens = [token for token in _REQUIRED_TOKENS if token not in content]
-    if missing_tokens:
-        return "missing tokens: " + ", ".join(sorted(missing_tokens))
     return None
 
 
@@ -270,7 +279,13 @@ def validate_snapshot(path: Path) -> Tuple[bool, Dict[str, str]]:
             issues[name] = "missing"
             continue
         if name == "tokenizer.json":
-            error = _validate_tokenizer(candidate)
+            error, missing_tokens = _validate_tokenizer(candidate)
+            if missing_tokens:
+                log.warning(
+                    "Tokenizer %s missing special tokens: %s",  # pragma: no cover - diagnostics only
+                    candidate,
+                    ", ".join(missing_tokens),
+                )
         else:
             _, error = _load_json(candidate)
         if error:
