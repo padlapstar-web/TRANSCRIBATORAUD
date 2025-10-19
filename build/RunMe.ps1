@@ -11,31 +11,6 @@ param(
     [switch]$KillApp
 )
 
-function Stop-AppInstances {
-    param(
-        [string[]] $ProcessNames = @('TRANSCRIBATORAUD', 'TRANSCRIBATORAUD_console')
-    )
-
-    foreach ($name in $ProcessNames) {
-        Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
-            try {
-                $_.CloseMainWindow() | Out-Null
-            } catch {}
-        }
-    }
-
-    Start-Sleep -Seconds 2
-
-    foreach ($name in $ProcessNames) {
-        Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
-            Write-Host "Killing $($_.ProcessName) PID=$($_.Id)" -ForegroundColor Yellow
-            try {
-                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-            } catch {}
-        }
-    }
-}
-
 function Clear-ReadOnlyAttributes {
     param([string] $Path)
     if (Test-Path $Path) {
@@ -70,6 +45,63 @@ function Remove-Path-Retry {
     throw "Could not delete '$Path' - files are locked."
 }
 
+function Stop-RunningApp {
+    param(
+        [Parameter(Mandatory=$true)][string]$DistDir,
+        [int]$Rounds = 3,
+        [int]$WaitMs = 800
+    )
+
+    $distGlob = ($DistDir.TrimEnd('\') + '\*')
+    for ($i = 1; $i -le $Rounds; $i++) {
+        $procs = Get-CimInstance Win32_Process |
+            Where-Object { $_.ExecutablePath -and $_.ExecutablePath -like $distGlob }
+
+        if (-not $procs) { return $true }
+
+        Write-Host "Found running instances under $DistDir (round $i/$Rounds). Trying to stop..."
+
+        foreach ($p in $procs) {
+            try {
+                $ps = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+                if ($ps) {
+                    [void]$ps.CloseMainWindow()
+                }
+            } catch {}
+        }
+        Start-Sleep -Milliseconds $WaitMs
+
+        foreach ($p in $procs) {
+            try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+        }
+        Start-Sleep -Milliseconds $WaitMs
+
+        foreach ($p in $procs) {
+            try {
+                & taskkill.exe /PID $p.ProcessId /F /T | Out-Null
+            } catch {}
+        }
+
+        $deadline = (Get-Date).AddSeconds(3)
+        while ((Get-Date) -lt $deadline) {
+            $still = Get-CimInstance Win32_Process |
+                Where-Object { $_.ExecutablePath -and $_.ExecutablePath -like $distGlob }
+            if (-not $still) { break }
+            Start-Sleep -Milliseconds 250
+        }
+
+        $left = Get-CimInstance Win32_Process |
+            Where-Object { $_.ExecutablePath -and $_.ExecutablePath -like $distGlob }
+        if (-not $left) {
+            Write-Host "All running instances were terminated."
+            return $true
+        }
+    }
+
+    Write-Warning "Running app instances are still alive after $Rounds rounds."
+    return $false
+}
+
 function Resolve-PowerShell {
     try {
         (Get-Command pwsh -ErrorAction Stop).Source
@@ -99,17 +131,6 @@ if (-not $NoSyntaxCheck) {
 if ($KillApp) {
     cmd /c "taskkill /F /IM TRANSCRIBATORAUD.exe /T" | Out-Null
     cmd /c "taskkill /F /IM TRANSCRIBATORAUD_console.exe /T" | Out-Null
-}
-
-$running = Get-Process -Name 'TRANSCRIBATORAUD','TRANSCRIBATORAUD_console' -ErrorAction SilentlyContinue
-if ($running) {
-    Write-Host "Found running instances: $($running.ProcessName -join ', '). Trying to stop..." -ForegroundColor Yellow
-    Stop-AppInstances
-    Start-Sleep -Seconds 1
-    $still = Get-Process -Name 'TRANSCRIBATORAUD','TRANSCRIBATORAUD_console' -ErrorAction SilentlyContinue
-    if ($still) {
-        throw "Running app instances are still alive. Close them manually and rerun the build."
-    }
 }
 
 Set-StrictMode -Version Latest
@@ -144,24 +165,28 @@ function Get-Python312Path {
 }
 
 if ($Clean) {
-    Write-Host "Stopping running app instances..." -ForegroundColor Cyan
-    Stop-AppInstances
-
     $distDir  = Join-Path $ProjectRoot 'dist'
     $buildDir = Join-Path $ProjectRoot 'build/TRANSCRIBATORAUD'
+    $exeDir   = Join-Path $distDir 'TRANSCRIBATORAUD'
 
     Write-Host "Cleaning previous artefacts..." -ForegroundColor Cyan
 
-    if (Test-Path $distDir) {
-        $procs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like (Join-Path $distDir 'TRANSCRIBATORAUD*.exe') }
-        foreach ($p in $procs) {
-            Write-Host "Killing $($p.ProcessName) (PID $($p.Id))" -ForegroundColor Yellow
-            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    if (Test-Path $exeDir) {
+        $exePath = Join-Path $exeDir 'TRANSCRIBATORAUD.exe'
+        if (Test-Path $exePath) {
+            Start-Process $exePath -ArgumentList '--shutdown' -WindowStyle Hidden -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
         }
-        Start-Sleep -Milliseconds 400
-        Get-ChildItem $distDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+
+        if (-not (Stop-RunningApp -DistDir $exeDir -Rounds 4 -WaitMs 600)) {
+            throw "Running app instances are still alive. Close them manually and rerun the build."
+        }
+
+        Get-ChildItem $exeDir -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
             try { $_.IsReadOnly = $false } catch {}
         }
+        try { Remove-Item -Recurse -Force $exeDir } catch { Start-Sleep -Milliseconds 400 }
+        if (Test-Path $exeDir) { Remove-Item -Recurse -Force $exeDir }
     }
 
     if (Test-Path $distDir)  { Remove-Path-Retry -Path $distDir  -MaxRetries 15 -DelaySec 1 }
