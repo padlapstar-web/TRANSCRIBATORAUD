@@ -196,7 +196,7 @@ def load_whisper(
                             str(model_dir),
                             on_status=status_cb,
                             on_progress=progress_cb,
-                            force_files=("tokenizer.json", "config.json"),
+                            force_files=("tokenizer.json", "config.json", "vocabulary.json"),
                         )
                     )
                     repair_attempted = True

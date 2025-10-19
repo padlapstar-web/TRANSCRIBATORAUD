@@ -1,16 +1,34 @@
+import hashlib
 import json
 import os
 import logging
+import shutil
 from pathlib import Path
-from typing import Callable, Dict, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, Optional, Sequence, Tuple
 
-from huggingface_hub import hf_hub_download, snapshot_download
+from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+from requests import HTTPError
 
 log = logging.getLogger(__name__)
 
-FILES = ["model.bin", "tokenizer.json", "config.json", "README.md"]
+FILES = [
+    "model.bin",
+    "model.bin.*",
+    "tokenizer.json",
+    "config.json",
+    "vocabulary.json",
+    "README.md",
+]
 _MODEL_BIN_PATTERN = "model.bin*"
-_REQUIRED_JSON = ("config.json", "tokenizer.json")
+_REQUIRED_JSON = ("config.json", "tokenizer.json", "vocabulary.json")
+_REQUIRED_TOKENS = {
+    "<|startoftranscript|>",
+    "<|endoftext|>",
+    "<|nospeech|>",
+    "<|notimestamps|>",
+}
+
+_HF_API = HfApi()
 
 
 def _status_callback(cb: Optional[Callable[[str], None]], message: str) -> None:
@@ -24,17 +42,85 @@ def _status_callback(cb: Optional[Callable[[str], None]], message: str) -> None:
     log.info(message)
 
 
-def _load_json(path: Path) -> Tuple[bool, Optional[str]]:
+def _load_json(path: Path) -> Tuple[Optional[dict], Optional[str]]:
     try:
         with path.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
-        if not isinstance(data, dict):
-            return False, "not a JSON object"
-        if path.name == "tokenizer.json" and "model" not in data:
-            return False, "tokenizer.json missing 'model' key"
-        return True, None
     except Exception as exc:  # pragma: no cover - diagnostics only
-        return False, str(exc)
+        return None, str(exc)
+    if not isinstance(data, dict):
+        return None, "not a JSON object"
+    return data, None
+
+
+def _validate_tokenizer(path: Path) -> Optional[str]:
+    data, error = _load_json(path)
+    if data is None:
+        return f"invalid JSON ({error})" if error else "invalid JSON"
+    model = data.get("model")
+    if not isinstance(model, dict):
+        return "tokenizer.json missing 'model' section"
+    vocab = model.get("vocab")
+    if not isinstance(vocab, dict):
+        return "tokenizer.json missing vocab"
+    missing_tokens = sorted(token for token in _REQUIRED_TOKENS if token not in vocab)
+    if missing_tokens:
+        return "missing tokens: " + ", ".join(missing_tokens)
+    merges = model.get("merges")
+    if not isinstance(merges, list) or not merges:
+        return "tokenizer.json missing merges"
+    return None
+
+
+def _normalise_vocabulary_payload(tokenizer_data: dict) -> dict:
+    model_section = tokenizer_data.get("model")
+    if not isinstance(model_section, dict):
+        raise ValueError("tokenizer.json missing 'model' section")
+    vocab = model_section.get("vocab")
+    if not isinstance(vocab, dict):
+        raise ValueError("tokenizer.json missing vocab")
+    merges = model_section.get("merges")
+    if not isinstance(merges, list) or not merges:
+        raise ValueError("tokenizer.json missing merges")
+    payload = {
+        "type": model_section.get("type", "BPE"),
+        "model": {
+            key: value
+            for key, value in model_section.items()
+            if key in {"vocab", "merges", "continuing_subword_prefix", "end_of_word_suffix", "unk_token"}
+        },
+    }
+    payload["model"].setdefault("unk_token", "<unk>")
+    payload["model"].setdefault("continuing_subword_prefix", "")
+    payload["model"].setdefault("end_of_word_suffix", "")
+    return payload
+
+
+def _validate_vocabulary(path: Path) -> Optional[str]:
+    data, error = _load_json(path)
+    if data is None:
+        return f"invalid JSON ({error})" if error else "invalid JSON"
+    model_section = data.get("model")
+    if not isinstance(model_section, dict):
+        return "vocabulary.json missing model section"
+    vocab = model_section.get("vocab") or model_section.get("vocabulary")
+    if not isinstance(vocab, dict) or not vocab:
+        return "vocabulary.json missing vocab"
+    merges = model_section.get("merges")
+    if not isinstance(merges, list) or not merges:
+        return "vocabulary.json missing merges"
+    missing_tokens = sorted(token for token in _REQUIRED_TOKENS if token not in vocab)
+    if missing_tokens:
+        return "missing tokens: " + ", ".join(missing_tokens)
+    return None
+
+
+def _compute_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(8192), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def validate_snapshot(path: Path) -> Tuple[bool, Dict[str, str]]:
@@ -59,11 +145,35 @@ def validate_snapshot(path: Path) -> Tuple[bool, Dict[str, str]]:
         if not candidate.exists() or candidate.stat().st_size == 0:
             issues[name] = "missing"
             continue
-        ok, reason = _load_json(candidate)
-        if not ok:
-            issues[name] = f"invalid JSON ({reason})" if reason else "invalid JSON"
+        if name == "tokenizer.json":
+            error = _validate_tokenizer(candidate)
+        elif name == "vocabulary.json":
+            error = _validate_vocabulary(candidate)
+        else:
+            _, error = _load_json(candidate)
+        if error:
+            issues[name] = error
 
     return (not issues), issues
+
+
+def _log_snapshot_diagnostics(path: Path, repo_id: str, revision: Optional[str]) -> None:
+    if revision:
+        log.info("Model %s revision %s", repo_id, revision)
+    else:
+        log.info("Model %s revision unknown", repo_id)
+    entries: Iterable[Path]
+    entries = list(sorted(path.glob(_MODEL_BIN_PATTERN)))
+    entries += [path / name for name in ("config.json", "tokenizer.json", "vocabulary.json")]
+    for candidate in entries:
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        try:
+            sha = _compute_sha256(candidate)
+            size = candidate.stat().st_size
+            log.info("%s — size=%d bytes sha256=%s", candidate.name, size, sha)
+        except Exception as exc:  # pragma: no cover - diagnostics only
+            log.warning("Failed to compute diagnostics for %s: %s", candidate, exc)
 
 
 def _remove_patterns(base: Path, patterns: Sequence[str]) -> None:
@@ -84,6 +194,23 @@ def _remove_patterns(base: Path, patterns: Sequence[str]) -> None:
                     candidate.rmdir()
                 except Exception:
                     pass
+
+
+def _rebuild_vocabulary(local_dir: Path) -> bool:
+    tokenizer_path = local_dir / "tokenizer.json"
+    vocabulary_path = local_dir / "vocabulary.json"
+    data, error = _load_json(tokenizer_path)
+    if data is None:
+        log.error("Cannot rebuild vocabulary.json: tokenizer.json invalid (%s)", error)
+        return False
+    try:
+        payload = _normalise_vocabulary_payload(data)
+    except ValueError as exc:
+        log.error("Cannot rebuild vocabulary.json: %s", exc)
+        return False
+    vocabulary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    log.info("Generated vocabulary.json locally from tokenizer.json")
+    return True
 
 
 def _redownload_problem_files(
@@ -118,13 +245,21 @@ def _redownload_problem_files(
                 target.unlink()
             except Exception:
                 pass
-        hf_hub_download(
-            repo_id=repo_id,
-            filename=name,
-            local_dir=str(local_dir),
-            local_dir_use_symlinks=False,
-            resume_download=True,
-        )
+        try:
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=name,
+                local_dir=str(local_dir),
+                local_dir_use_symlinks=False,
+                resume_download=True,
+            )
+        except HTTPError as exc:
+            if name == "vocabulary.json" and exc.response is not None and exc.response.status_code == 404:
+                log.warning("vocabulary.json missing upstream; attempting local rebuild")
+                if not _rebuild_vocabulary(local_dir):
+                    raise
+            else:
+                raise
 
 
 def ensure_model(
@@ -140,6 +275,13 @@ def ensure_model(
 
     local_path = Path(local_dir)
     local_path.mkdir(parents=True, exist_ok=True)
+
+    revision: Optional[str] = None
+    try:
+        info = _HF_API.model_info(repo_id)
+        revision = getattr(info, "sha", None)
+    except Exception as exc:  # pragma: no cover - diagnostics only
+        log.debug("Failed to fetch model info for %s: %s", repo_id, exc)
 
     if force_files:
         _status_callback(on_status, "Повторная загрузка выбранных файлов модели…")
@@ -164,15 +306,38 @@ def ensure_model(
     )
 
     attempts = 0
+    full_refresh_performed = False
     while True:
         ok, issues = validate_snapshot(local_path)
         if ok:
             break
         attempts += 1
-        if attempts > 2:
-            details = ", ".join(f"{name}: {reason}" for name, reason in issues.items())
-            raise RuntimeError(f"Не удалось восстановить модель {repo_id}: {details}")
-        _redownload_problem_files(repo_id, local_path, issues, on_status)
+        if attempts == 1:
+            _redownload_problem_files(repo_id, local_path, issues, on_status)
+            continue
+        if not full_refresh_performed:
+            _status_callback(on_status, "Полная повторная загрузка модели…")
+            for entry in local_path.iterdir():
+                if entry.is_file():
+                    try:
+                        entry.unlink()
+                    except Exception:
+                        pass
+                else:
+                    shutil.rmtree(entry, ignore_errors=True)
+            snapshot_download(
+                repo_id=repo_id,
+                local_dir=str(local_path),
+                local_dir_use_symlinks=False,
+                allow_patterns=FILES,
+                resume_download=False,
+                max_workers=4,
+                tqdm_class=None,
+            )
+            full_refresh_performed = True
+            continue
+        details = ", ".join(f"{name}: {reason}" for name, reason in issues.items())
+        raise RuntimeError(f"Не удалось восстановить модель {repo_id}: {details}")
 
     if on_progress:
         try:
@@ -180,6 +345,7 @@ def ensure_model(
         except Exception:
             log.exception("progress callback failed")
 
+    _log_snapshot_diagnostics(local_path, repo_id, revision)
     return str(local_path)
 
 
