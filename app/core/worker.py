@@ -17,7 +17,7 @@ from faster_whisper import WhisperModel
 
 from app.core.asr import Word, segments_to_words
 from app.core.exporter import EXPORTERS, normalise_formats
-from app.core.model_prefetch import ensure_model, validate_snapshot
+from app.core.model_prefetch import VOCABULARY_CANDIDATES, ensure_model, validate_snapshot
 from app.core.models import resolve_repo_id
 from app.core.paths import MODELS_DIR
 from app.diagnostics.runtime_info import dump_runtime_info
@@ -196,7 +196,7 @@ def load_whisper(
                             str(model_dir),
                             on_status=status_cb,
                             on_progress=progress_cb,
-                            force_files=("tokenizer.json", "config.json", "vocabulary.json"),
+                            force_files=("tokenizer.json", "config.json", *VOCABULARY_CANDIDATES),
                         )
                     )
                     repair_attempted = True

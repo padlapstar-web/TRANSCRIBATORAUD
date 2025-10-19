@@ -17,10 +17,12 @@ FILES = [
     "tokenizer.json",
     "config.json",
     "vocabulary.json",
+    "vocabulary.txt",
     "README.md",
 ]
 _MODEL_BIN_PATTERN = "model.bin*"
-_REQUIRED_JSON = ("config.json", "tokenizer.json", "vocabulary.json")
+_REQUIRED_JSON = ("config.json", "tokenizer.json")
+VOCABULARY_CANDIDATES: Tuple[str, ...] = ("vocabulary.json", "vocabulary.txt")
 _REQUIRED_TOKENS = {
     "<|startoftranscript|>",
     "<|endoftext|>",
@@ -96,7 +98,7 @@ def _normalise_vocabulary_payload(tokenizer_data: dict) -> dict:
     return payload
 
 
-def _validate_vocabulary(path: Path) -> Optional[str]:
+def _validate_vocabulary_json(path: Path) -> Optional[str]:
     data, error = _load_json(path)
     if data is None:
         return f"invalid JSON ({error})" if error else "invalid JSON"
@@ -112,6 +114,19 @@ def _validate_vocabulary(path: Path) -> Optional[str]:
     missing_tokens = sorted(token for token in _REQUIRED_TOKENS if token not in vocab)
     if missing_tokens:
         return "missing tokens: " + ", ".join(missing_tokens)
+    return None
+
+
+def _validate_vocabulary_txt(path: Path) -> Optional[str]:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except Exception as exc:  # pragma: no cover - diagnostics only
+        return f"read error: {exc}"
+    if not content.strip():
+        return "empty"
+    missing_tokens = [token for token in _REQUIRED_TOKENS if token not in content]
+    if missing_tokens:
+        return "missing tokens: " + ", ".join(sorted(missing_tokens))
     return None
 
 
@@ -147,12 +162,30 @@ def validate_snapshot(path: Path) -> Tuple[bool, Dict[str, str]]:
             continue
         if name == "tokenizer.json":
             error = _validate_tokenizer(candidate)
-        elif name == "vocabulary.json":
-            error = _validate_vocabulary(candidate)
         else:
             _, error = _load_json(candidate)
         if error:
             issues[name] = error
+
+    vocabulary_path: Optional[Path] = None
+    for vocab_name in VOCABULARY_CANDIDATES:
+        candidate = path / vocab_name
+        if candidate.exists() and candidate.is_file():
+            vocabulary_path = candidate
+            break
+
+    if vocabulary_path is None:
+        issues["vocabulary.json|vocabulary.txt"] = "missing"
+    else:
+        if vocabulary_path.stat().st_size == 0:
+            issues[vocabulary_path.name] = "empty"
+        else:
+            if vocabulary_path.suffix == ".json":
+                error = _validate_vocabulary_json(vocabulary_path)
+            else:
+                error = _validate_vocabulary_txt(vocabulary_path)
+            if error:
+                issues[vocabulary_path.name] = error
 
     return (not issues), issues
 
@@ -164,7 +197,9 @@ def _log_snapshot_diagnostics(path: Path, repo_id: str, revision: Optional[str])
         log.info("Model %s revision unknown", repo_id)
     entries: Iterable[Path]
     entries = list(sorted(path.glob(_MODEL_BIN_PATTERN)))
-    entries += [path / name for name in ("config.json", "tokenizer.json", "vocabulary.json")]
+    entries += [path / name for name in ("config.json", "tokenizer.json")]
+    for vocab_name in VOCABULARY_CANDIDATES:
+        entries.append(path / vocab_name)
     for candidate in entries:
         if not candidate.exists() or not candidate.is_file():
             continue
@@ -213,6 +248,29 @@ def _rebuild_vocabulary(local_dir: Path) -> bool:
     return True
 
 
+def _download_vocabulary(repo_id: str, local_dir: Path) -> None:
+    try:
+        hf_hub_download(
+            repo_id=repo_id,
+            filename="vocabulary.json",
+            local_dir=str(local_dir),
+            local_dir_use_symlinks=False,
+            resume_download=True,
+        )
+        return
+    except HTTPError as exc:
+        if exc.response is None or exc.response.status_code != 404:
+            raise
+        log.info("vocabulary.json not available upstream; trying vocabulary.txt")
+    hf_hub_download(
+        repo_id=repo_id,
+        filename="vocabulary.txt",
+        local_dir=str(local_dir),
+        local_dir_use_symlinks=False,
+        resume_download=True,
+    )
+
+
 def _redownload_problem_files(
     repo_id: str,
     local_dir: Path,
@@ -238,6 +296,18 @@ def _redownload_problem_files(
     for name in problematic:
         if name.startswith("model.bin") or name == _MODEL_BIN_PATTERN:
             continue  # already handled via snapshot_download above
+        if name == "vocabulary.json|vocabulary.txt":
+            _status_callback(status_cb, "Перекачиваем словарь модели…")
+            try:
+                _download_vocabulary(repo_id, local_dir)
+            except HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 404:
+                    log.warning("Neither vocabulary.json nor vocabulary.txt available; attempting local rebuild")
+                    if not _rebuild_vocabulary(local_dir):
+                        raise
+                else:
+                    raise
+            continue
         _status_callback(status_cb, f"Перекачиваем {name}… ({issues[name]})")
         target = local_dir / name
         if target.exists():
@@ -254,10 +324,13 @@ def _redownload_problem_files(
                 resume_download=True,
             )
         except HTTPError as exc:
-            if name == "vocabulary.json" and exc.response is not None and exc.response.status_code == 404:
-                log.warning("vocabulary.json missing upstream; attempting local rebuild")
-                if not _rebuild_vocabulary(local_dir):
-                    raise
+            if name in VOCABULARY_CANDIDATES and exc.response is not None and exc.response.status_code == 404:
+                log.warning("%s missing upstream; attempting alternative vocabulary download", name)
+                try:
+                    _download_vocabulary(repo_id, local_dir)
+                except HTTPError:
+                    if not _rebuild_vocabulary(local_dir):
+                        raise
             else:
                 raise
 
@@ -349,4 +422,4 @@ def ensure_model(
     return str(local_path)
 
 
-__all__ = ["ensure_model", "validate_snapshot"]
+__all__ = ["ensure_model", "validate_snapshot", "VOCABULARY_CANDIDATES"]

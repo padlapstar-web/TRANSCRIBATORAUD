@@ -61,7 +61,7 @@ def test_validate_snapshot_requires_vocabulary(tmp_path: Path) -> None:
     _write_tokenizer(tmp_path / "tokenizer.json")
     ok, issues = model_prefetch.validate_snapshot(tmp_path)
     assert not ok
-    assert "vocabulary.json" in issues
+    assert "vocabulary.json|vocabulary.txt" in issues
 
 
 def test_ensure_model_recovers_missing_vocabulary(monkeypatch, tmp_path: Path) -> None:
@@ -93,7 +93,47 @@ def test_ensure_model_recovers_missing_vocabulary(monkeypatch, tmp_path: Path) -
     assert created_vocab is not None
 
 
-def test_ensure_model_rebuilds_vocabulary_on_404(monkeypatch, tmp_path: Path) -> None:
+def test_ensure_model_downloads_vocabulary_txt_when_available(monkeypatch, tmp_path: Path) -> None:
+    repo_id = "dummy/repo"
+
+    def fake_snapshot_download(**kwargs):
+        directory = Path(kwargs["local_dir"])
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "model.bin").write_bytes(b"bin")
+        (directory / "config.json").write_text("{}", encoding="utf-8")
+        _write_tokenizer(directory / "tokenizer.json")
+
+    def fake_hf_hub_download(**kwargs):
+        filename = kwargs["filename"]
+        directory = Path(kwargs["local_dir"])
+        if filename == "vocabulary.json":
+            from requests import HTTPError
+
+            class _Resp:
+                status_code = 404
+
+            raise HTTPError(response=_Resp())
+        if filename == "vocabulary.txt":
+            path = directory / "vocabulary.txt"
+            payload = "\n".join([
+                "<|startoftranscript|>",
+                "<|endoftext|>",
+                "<|nospeech|>",
+                "<|notimestamps|>",
+            ])
+            path.write_text(payload, encoding="utf-8")
+            return str(path)
+        raise AssertionError("unexpected download request")
+
+    monkeypatch.setattr(model_prefetch, "snapshot_download", fake_snapshot_download)
+    monkeypatch.setattr(model_prefetch, "hf_hub_download", fake_hf_hub_download)
+
+    result = model_prefetch.ensure_model(repo_id, str(tmp_path))
+    vocab_txt = Path(result, "vocabulary.txt")
+    assert vocab_txt.is_file()
+
+
+def test_ensure_model_rebuilds_vocabulary_when_not_available(monkeypatch, tmp_path: Path) -> None:
     repo_id = "dummy/repo"
 
     def fake_snapshot_download(**kwargs):
@@ -107,11 +147,9 @@ def test_ensure_model_rebuilds_vocabulary_on_404(monkeypatch, tmp_path: Path) ->
         status_code = 404
 
     def fake_hf_hub_download(**kwargs):
-        if kwargs["filename"] == "vocabulary.json":
-            from requests import HTTPError
+        from requests import HTTPError
 
-            raise HTTPError(response=_Resp())
-        raise AssertionError("unexpected download request")
+        raise HTTPError(response=_Resp())
 
     monkeypatch.setattr(model_prefetch, "snapshot_download", fake_snapshot_download)
     monkeypatch.setattr(model_prefetch, "hf_hub_download", fake_hf_hub_download)
