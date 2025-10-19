@@ -53,7 +53,10 @@ def _download_lock(target_dir: Path) -> FileLock:
 
 
 def _disable_hf_transfer_env() -> None:
-    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
+    previous = os.environ.get("HF_HUB_ENABLE_HF_TRANSFER")
+    if previous != "0":
+        log.warning("HF Transfer отключен для повторной попытки загрузки (было=%s)", previous)
+    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
 
 def _is_file_in_use_error(exc: Exception) -> bool:
@@ -90,7 +93,6 @@ def _safe_hf_download(repo_id: str, filename: str, dst_dir: Path) -> str:
                     local_dir=str(dst_dir),
                     local_dir_use_symlinks=False,
                     resume_download=True,
-                    use_hf_transfer=False,
                 )
                 _cleanup_cache_artifacts()
                 return path
@@ -108,17 +110,28 @@ def _safe_snapshot(repo_id: str, dst_dir: Path, force_download: bool) -> str:
     for attempt in (1, 2):
         with _download_lock(dst_dir):
             try:
-                path = snapshot_download(
-                    repo_id=repo_id,
-                    local_dir=str(dst_dir),
-                    local_dir_use_symlinks=False,
-                    allow_patterns=_DOWNLOAD_PATTERNS,
-                    resume_download=True,
-                    force_download=force_download,
-                    max_workers=1,
-                    use_hf_transfer=False,
-                    tqdm_class=None,
-                )
+                try:
+                    path = snapshot_download(
+                        repo_id=repo_id,
+                        local_dir=str(dst_dir),
+                        local_dir_use_symlinks=False,
+                        allow_patterns=_DOWNLOAD_PATTERNS,
+                        resume_download=True,
+                        force_download=force_download,
+                        max_workers=1,
+                        tqdm_class=None,
+                    )
+                except TypeError:
+                    # Совместимость со старыми версиями huggingface_hub без max_workers.
+                    path = snapshot_download(
+                        repo_id=repo_id,
+                        local_dir=str(dst_dir),
+                        local_dir_use_symlinks=False,
+                        allow_patterns=_DOWNLOAD_PATTERNS,
+                        resume_download=True,
+                        force_download=force_download,
+                        tqdm_class=None,
+                    )
                 _cleanup_cache_artifacts()
                 return path
             except Exception as exc:
