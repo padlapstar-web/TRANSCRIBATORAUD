@@ -46,8 +46,10 @@ def setup_logging(debug: bool = False) -> str:
     file_handler.setFormatter(logging.Formatter(fmt))
     root.addHandler(file_handler)
 
-    logging.getLogger("huggingface_hub").setLevel(level if debug else logging.INFO)
-    logging.getLogger("ctranslate2").setLevel(level if debug else logging.INFO)
+    hf_level = logging.DEBUG if debug else logging.WARNING
+    logging.getLogger("huggingface_hub").setLevel(hf_level)
+    logging.getLogger("hf_transfer").setLevel(hf_level)
+    logging.getLogger("ctranslate2").setLevel(logging.DEBUG if debug else logging.INFO)
 
     setattr(root, _LOGGER_ATTR, True)
     return str(log_file)

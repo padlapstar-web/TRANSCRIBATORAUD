@@ -208,6 +208,9 @@ $pythonPath = Get-Python312Path
 
 Write-Host "Using Python interpreter: $pythonPath"
 
+$env:HF_HUB_ENABLE_HF_TRANSFER = "1"
+$env:HF_HUB_ENABLE_XET = "1"
+
 $bootstrap = Join-Path $ProjectRoot 'scripts/bootstrap.ps1'
 
 & $bootstrap -PythonBin $pythonPath

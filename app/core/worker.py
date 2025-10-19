@@ -9,16 +9,15 @@ import shutil
 import subprocess
 import tempfile
 import threading
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Sequence, Tuple
+from typing import Callable, Iterable, List, Sequence, Tuple
 
 from faster_whisper import WhisperModel
 
 from app.core.asr import Word, segments_to_words
 from app.core.exporter import EXPORTERS, normalise_formats
-from app.core.model_prefetch import prefetch_model
+from app.core.model_prefetch import ensure_model
 from app.core.models import resolve_repo_id
 from app.core.paths import MODELS_DIR
 from app.diagnostics.runtime_info import dump_runtime_info
@@ -32,30 +31,14 @@ except ImportError:  # pragma: no cover - GUI not installed in some environments
         return lambda *_a, **_k: None
 
 
-__all__ = ["JobConfig", "TranscribeWorker", "load_model_with_timeout"]
+__all__ = ["JobConfig", "TranscribeWorker", "load_whisper"]
 
 LOGGER = logging.getLogger(__name__)
 _REQUIRED_LOCAL_FILES = ("config.json", "tokenizer.json")
 
 
-@contextmanager
-def _periodic_log(message: str, delay: float = 30.0, interval: float = 5.0):
-    """Log *message* every ``interval`` seconds after ``delay`` seconds have passed."""
-
-    stop_event = threading.Event()
-
-    def _run() -> None:
-        if not stop_event.wait(delay):
-            while not stop_event.wait(interval):
-                LOGGER.info(message)
-
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-    try:
-        yield
-    finally:
-        stop_event.set()
-        thread.join(timeout=1)
+class CancelledError(RuntimeError):
+    """Raised when the user cancels the running job."""
 
 
 def _gpu_name() -> str:
@@ -63,7 +46,12 @@ def _gpu_name() -> str:
     if not candidate:
         return "nvidia-smi not found"
     try:
-        result = subprocess.run([candidate, "--query-gpu=name,pci.bus_id", "--format=csv,noheader"], capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            [candidate, "--query-gpu=name,pci.bus_id", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         output = (result.stdout or "").strip()
         if output:
             return output
@@ -84,92 +72,125 @@ def _validate_local_model_dir(path: Path) -> Path:
     return path
 
 
-def _load_model_impl(
-    repo_or_path: str,
-    device: str,
-    compute_type: str,
-    download_root: Path | None,
-    local_only: bool,
-) -> WhisperModel:
-    return WhisperModel(
-        repo_or_path,
-        device=device,
-        compute_type=compute_type,
-        download_root=str(download_root) if download_root else None,
-        local_files_only=local_only,
-        num_workers=1,
-    )
+def _percent(done: int, total: int) -> int:
+    if total <= 0:
+        return 0
+    return max(0, min(100, int(done * 100 / total)))
 
 
-def load_model_with_timeout(
+def _periodic_log(message: str, delay: float = 30.0, interval: float = 5.0):
+    """Yield a context manager logging *message* periodically while active."""
+
+    class _PeriodicLogger:
+        def __init__(self) -> None:
+            self._stop = threading.Event()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+
+        def __enter__(self):
+            self._thread.start()
+            return self
+
+        def __exit__(self, *_exc):
+            self._stop.set()
+            self._thread.join(timeout=1)
+
+        def _run(self) -> None:
+            if not self._stop.wait(delay):
+                while not self._stop.wait(interval):
+                    LOGGER.info(message)
+
+    return _PeriodicLogger()
+
+
+def load_whisper(
     repo_id: str,
     *,
     prefer_cuda: bool = True,
     compute_type_cuda: str = "float16",
     compute_type_cpu: str = "int8",
     timeout_sec: int = 600,
+    local_override: Path | None = None,
     allow_download: bool = True,
-) -> Tuple[WhisperModel, str, str]:
-    """Initialise a WhisperModel with optional CUDA and a timeout."""
+    status_cb: Callable[[str], None] | None = None,
+    progress_cb: Callable[[int, int], None] | None = None,
+) -> Tuple[WhisperModel, str, str, Path]:
+    """Load a Whisper model ensuring it is available locally with progress hooks."""
 
     os.environ.setdefault("CT2_VERBOSE", "1")
     os.environ.setdefault("CT2_LOG_LEVEL", "INFO")
 
-    repo_path = Path(repo_id)
-    if repo_path.exists():
-        local_dir = _validate_local_model_dir(repo_path)
+    if local_override is not None:
+        model_dir = _validate_local_model_dir(local_override)
     else:
         if not allow_download:
             raise RuntimeError("Model download disabled but local snapshot not found")
         target_dir = MODELS_DIR / repo_id.replace("/", "__")
-        local_dir = prefetch_model(repo_id, target_dir=target_dir)
+        model_dir = Path(
+            ensure_model(
+                repo_id,
+                str(target_dir),
+                on_status=status_cb,
+                on_progress=progress_cb,
+            )
+        )
 
-    device_try = "cuda" if prefer_cuda else "cpu"
-    compute_try = compute_type_cuda if prefer_cuda else compute_type_cpu
+    if progress_cb:
+        progress_cb(1, 1)  # mark completion for zero-length downloads
 
-    LOGGER.info("Preparing Whisper initialisation (target=%s/%s, allow_download=%s)", device_try, compute_try, allow_download)
+    def _attempt(device: str, compute: str) -> WhisperModel:
+        if status_cb:
+            status_cb(f"Инициализация модели на {device}/{compute}…")
+        LOGGER.info("Loading Whisper model (%s/%s) from %s", device, compute, model_dir)
+        result_queue: "queue.Queue[WhisperModel | Exception]" = queue.Queue()
 
-    result_queue: "queue.Queue[Tuple[WhisperModel, str, str] | Exception]" = queue.Queue()
+        def _target() -> None:
+            try:
+                with _periodic_log("Whisper initialisation still in progress…"):
+                    model_instance = WhisperModel(
+                        str(model_dir),
+                        device=device,
+                        compute_type=compute,
+                        local_files_only=True,
+                        download_root=str(model_dir.parent),
+                        num_workers=1,
+                    )
+                result_queue.put(model_instance)
+            except Exception as exc:  # pragma: no cover - handled at call site
+                result_queue.put(exc)
 
-    def try_make(device: str, ctype: str, local_only: bool = True) -> WhisperModel:
-        with _periodic_log("Whisper initialisation still in progress…"):
-            return _load_model_impl(str(local_dir), device, ctype, download_root=local_dir.parent, local_only=local_only)
+        thread = threading.Thread(target=_target, daemon=True)
+        thread.start()
+        thread.join(timeout_sec)
+        if thread.is_alive():
+            LOGGER.error("Model init timeout after %s sec", timeout_sec)
+            raise TimeoutError(f"Model initialization exceeded {timeout_sec} seconds")
+        result = result_queue.get()
+        if isinstance(result, Exception):
+            raise result
+        return result
 
-    def worker() -> None:
+    attempts: list[Tuple[str, str]] = []
+    if prefer_cuda:
+        attempts.append(("cuda", compute_type_cuda))
+    attempts.append(("cpu", compute_type_cpu))
+
+    last_error: Exception | None = None
+    for device_name, compute_name in attempts:
         try:
-            model = try_make(device_try, compute_try, local_only=True)
-            result_queue.put((model, device_try, compute_try))
-        except Exception as cuda_exc:
-            if device_try == "cuda":
-                LOGGER.warning("CUDA init failed (%s). Falling back to CPU/int8…", cuda_exc)
-                try:
-                    model_cpu = try_make("cpu", compute_type_cpu, local_only=True)
-                    result_queue.put((model_cpu, "cpu", compute_type_cpu))
-                except Exception as cpu_exc:
-                    result_queue.put(RuntimeError(f"Both CUDA and CPU init failed: {cuda_exc} // {cpu_exc}"))
-            else:
-                result_queue.put(cuda_exc)
+            model = _attempt(device_name, compute_name)
+            descriptor = _gpu_name() if device_name == "cuda" else "CPU"
+            LOGGER.info("Model initialised using %s/%s (%s)", device_name, compute_name, descriptor)
+            if status_cb:
+                status_cb("Модель инициализирована.")
+            return model, device_name, compute_name, model_dir
+        except Exception as exc:
+            last_error = exc
+            LOGGER.warning("Failed to initialise Whisper on %s/%s: %s", device_name, compute_name, exc)
+            if device_name == "cuda" and status_cb:
+                status_cb("CUDA недоступна, переключаемся на CPU…")
 
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-    thread.join(timeout=timeout_sec)
-
-    if thread.is_alive():
-        LOGGER.error("Model init timeout after %s sec", timeout_sec)
-        raise TimeoutError(f"Model initialization exceeded {timeout_sec} seconds")
-
-    result = result_queue.get()
-    if isinstance(result, Exception):
-        raise result
-
-    model, device_used, compute_used = result
-    device_descriptor = _gpu_name() if device_used == "cuda" else "CPU"
-    try:
-        LOGGER.info("Model initialized OK at %s (%s/%s)", local_dir, device_used, compute_used)
-        LOGGER.info("Active device details: %s", device_descriptor)
-    except Exception:  # pragma: no cover - logging shouldn't break execution
-        pass
-    return model, device_used, compute_used
+    assert last_error is not None
+    raise last_error
 
 
 @dataclass(slots=True)
@@ -193,6 +214,8 @@ class TranscribeWorker(QThread):  # pragma: no cover - exercised via GUI runtime
     """Sequential transcription worker compatible with frozen PyInstaller builds."""
 
     log = Signal(str)
+    status = Signal(str)
+    download_progress = Signal(int)
     progress = Signal(int)
     done_file = Signal(str)
     finished_all = Signal()
@@ -202,23 +225,30 @@ class TranscribeWorker(QThread):  # pragma: no cover - exercised via GUI runtime
         super().__init__(parent)
         self._config = config
         self._files = [Path(path) for path in config.files]
-        self._stop_requested = False
+        self._cancel_requested = False
         self._had_error = False
         self._formats = normalise_formats(config.formats)
         self._logger = LOGGER.getChild("worker")
 
-    def stop(self) -> None:
+    def stop(self) -> None:  # pragma: no cover - invoked from UI thread
         """Request the worker to stop after the current file completes."""
 
-        self._stop_requested = True
+        self._cancel_requested = True
+
+    def _check_cancelled(self) -> None:
+        if self._cancel_requested:
+            raise CancelledError("Operation cancelled by user")
 
     def _log(self, message: str, level: int = logging.INFO) -> None:
         self._logger.log(level, message)
         self.log.emit(message)
 
-    def _emit_error(self, message: str) -> None:
-        self._log(message, logging.ERROR)
-        self.error.emit(message)
+    def _emit_status(self, message: str) -> None:
+        self.status.emit(message)
+
+    def _emit_download_progress(self, done: int, total: int) -> None:
+        percent = _percent(done, total)
+        self.download_progress.emit(percent)
 
     def _ensure_ffmpeg(self) -> Path:
         ffmpeg_path = self._config.ffmpeg
@@ -287,7 +317,7 @@ class TranscribeWorker(QThread):  # pragma: no cover - exercised via GUI runtime
         except Exception as exc:
             self._had_error = True
             self._logger.exception("FFmpeg validation failed")
-            self._emit_error(f"FFmpeg error: {exc!r} ({type(exc).__name__})")
+            self.error.emit(f"FFmpeg error: {exc!r} ({type(exc).__name__})")
             self.finished_all.emit()
             return
 
@@ -307,30 +337,29 @@ class TranscribeWorker(QThread):  # pragma: no cover - exercised via GUI runtime
         compute_cpu = compute_raw if compute_raw.startswith("int8") else "int8"
 
         repo_id = resolve_repo_id(self._config.model_name)
-        try:
-            if self._config.local_model_dir is not None:
-                local_dir = _validate_local_model_dir(self._config.local_model_dir)
-                source_identifier = str(local_dir)
-                allow_download = False
-            else:
-                source_identifier = repo_id
-                allow_download = self._config.allow_download
 
-            self._log(
-                f"Loading Whisper model '{self._config.model_name}' "
-                f"({self._config.device}/{self._config.compute_type})"
-            )
-            model, resolved_device, resolved_compute = load_model_with_timeout(
-                source_identifier,
+        try:
+            self._check_cancelled()
+            model, resolved_device, resolved_compute, _model_dir = load_whisper(
+                repo_id,
                 prefer_cuda=prefer_cuda,
                 compute_type_cuda=compute_cuda,
                 compute_type_cpu=compute_cpu,
                 timeout_sec=600,
-                allow_download=allow_download,
+                local_override=self._config.local_model_dir,
+                allow_download=self._config.allow_download,
+                status_cb=self._emit_status,
+                progress_cb=self._emit_download_progress,
             )
+            self.download_progress.emit(100)
+            self._check_cancelled()
             self._log(
                 f"Model ready ({resolved_device}/{resolved_compute}). Starting transcription of {len(self._files)} file(s)."
             )
+        except CancelledError:
+            self._log("Операция отменена пользователем до старта транскрибации.")
+            self.finished_all.emit()
+            return
         except Exception as exc:
             self._had_error = True
             self._logger.exception("Model initialisation failed")
@@ -338,19 +367,23 @@ class TranscribeWorker(QThread):  # pragma: no cover - exercised via GUI runtime
                 friendly = "Инициализация превысила лимит времени. Проверьте сеть/CDN или используйте офлайн модель."
             else:
                 friendly = f"Model init error: {exc!r} ({type(exc).__name__})"
-            self._emit_error(friendly)
+            self.error.emit(friendly)
             self.finished_all.emit()
             return
 
         total = len(self._files)
         self._log(f"Найдено файлов для обработки: {total}")
         for index, source in enumerate(self._files, start=1):
-            if self._stop_requested:
+            try:
+                self._check_cancelled()
+            except CancelledError:
+                self._log("Операция отменена пользователем.")
                 break
             try:
                 self._log(f"[{index}/{total}] Decode: {source.name}")
                 wav_path = self._decode_to_wav(ffmpeg_path, source)
                 try:
+                    self._check_cancelled()
                     self._log(f"[{index}/{total}] Transcribe: {source.name}")
                     words = self._transcribe_segments(model, wav_path, self._config.language)
                     self._export_outputs(words, source)
@@ -360,10 +393,13 @@ class TranscribeWorker(QThread):  # pragma: no cover - exercised via GUI runtime
                         os.remove(wav_path)
                     except OSError:
                         pass
+            except CancelledError:
+                self._log("Операция отменена пользователем.")
+                break
             except Exception as exc:
                 self._had_error = True
                 self._logger.exception("Failed to process %s", source)
-                self._emit_error(f"Failed to process {source}: {exc!r} ({type(exc).__name__})")
+                self.error.emit(f"Failed to process {source}: {exc!r} ({type(exc).__name__})")
 
             percent = int(index * 100 / total)
             self.progress.emit(percent)

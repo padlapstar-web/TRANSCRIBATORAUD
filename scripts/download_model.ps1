@@ -9,9 +9,9 @@ $env:HF_HUB_ENABLE_HF_TRANSFER = "1"
 Write-Host "Downloading $RepoId -> $OutDir"
 python - <<'PY'
 from pathlib import Path
-from app.core.model_prefetch import prefetch_model
+from app.core.model_prefetch import ensure_model
 
 repo = r"$RepoId"
 out_dir = Path(r"$OutDir")
-print(prefetch_model(repo, out_dir))
+print(ensure_model(repo, str(out_dir)))
 PY

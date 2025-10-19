@@ -1,6 +1,7 @@
 """Entry point for TRANSCRIBATORAUD application."""
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -74,12 +75,34 @@ def _run_gui() -> int:
     return app.exec()
 
 
+def _enable_console() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        if ctypes.windll.kernel32.GetConsoleWindow():  # type: ignore[attr-defined]
+            return
+        ctypes.windll.kernel32.AllocConsole()  # type: ignore[attr-defined]
+        sys.stdout = open("CONOUT$", "w", encoding="utf-8", buffering=1)
+        sys.stderr = open("CONOUT$", "w", encoding="utf-8", buffering=1)
+    except Exception:
+        pass
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run GUI by default, fall back to CLI if arguments are provided."""
-    args = list(sys.argv if argv is None else argv)
 
-    if len(args) > 1:
-        return run_cli(args[1:])
+    raw_args = list(sys.argv if argv is None else argv)
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--console", action="store_true")
+    known, remainder = parser.parse_known_args(raw_args[1:])
+
+    if known.console:
+        _enable_console()
+
+    if remainder:
+        return run_cli(remainder)
 
     return _run_gui()
 

@@ -1,117 +1,117 @@
-"""Utilities for downloading Whisper models with progress and validation."""
+"""Model download helper with progress callbacks."""
 from __future__ import annotations
 
-import fnmatch
 import logging
 import os
-import threading
+import time
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Optional
 
-from huggingface_hub import HfApi, snapshot_download
-from tqdm import tqdm
+from huggingface_hub import snapshot_download
 
-from app.core.paths import HF_CACHE, MODELS_DIR
+from app.core.paths import HF_CACHE
 
 log = logging.getLogger(__name__)
 
-REQUIRED_PATTERNS: Sequence[str] = (
-    "config.json",
-    "model.bin*",
-    "tokenizer.json",
-    "vocabulary.txt",
-    "README.md",
-)
+TRACKED_FILES = ["model.bin", "model.bin.*", "tokenizer.json", "config.json", "README.md"]
+
+StatusCallback = Optional[Callable[[str], None]]
+ProgressCallback = Optional[Callable[[int, int], None]]
 
 
-class TqdmToLogger(tqdm):
-    """Redirect tqdm updates into the application logger."""
-
-    def display(self, msg: str | None = None, pos: int | None = None) -> None:  # noqa: D401
-        if msg:
-            log.info("[download] %s", msg)
-        super().display(msg, pos)
-
-
-def _log_model_bin_growth(directory: Path, stop_event: threading.Event, total_expected: int | None) -> None:
-    """Continuously log growth of model.bin* files until ``stop_event`` is set."""
-
-    last_size = -1
-    while not stop_event.is_set():
-        files = [p for p in directory.glob("model.bin*") if p.is_file()]
-        total = sum(p.stat().st_size for p in files)
-        if files and total != last_size:
-            if total_expected:
-                log.info("model.bin progress: %.2f / %.2f MB", total / (1024 * 1024), total_expected / (1024 * 1024))
-            else:
-                log.info("model.bin progress: %.2f MB", total / (1024 * 1024))
-            last_size = total
-        if stop_event.wait(1.0):
-            break
+def _bytes_fmt(value: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    size = float(value)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} PB"
 
 
-def _patterns_match(path: str) -> bool:
-    return any(fnmatch.fnmatch(path, pattern) for pattern in REQUIRED_PATTERNS)
+def ensure_model(
+    repo_id: str,
+    local_dir: str,
+    on_status: StatusCallback = None,
+    on_progress: ProgressCallback = None,
+) -> str:
+    """Ensure that the requested model snapshot exists locally and report progress."""
 
+    path = Path(local_dir).expanduser().resolve()
+    path.mkdir(parents=True, exist_ok=True)
 
-def prefetch_model(repo_id: str, target_dir: Path | None = None, revision: str = "main") -> Path:
-    """Download all required CT2 model files into a local directory and return the path."""
+    if on_status:
+        on_status(f"Проверка модели {repo_id}…")
 
-    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(HF_CACHE))
+    if os.environ.get("HF_HUB_ENABLE_HF_TRANSFER") != "1":
+        log.warning("hf_transfer не включен; установите HF_HUB_ENABLE_HF_TRANSFER=1 для ускорения.")
+
     os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(HF_CACHE))
+    if "HUGGINGFACE_HUB_CACHE" in os.environ:
+        cache_info = os.environ["HUGGINGFACE_HUB_CACHE"]
+        log.debug("Using HF cache: %s", cache_info)
 
-    out_dir = Path(target_dir or (MODELS_DIR / repo_id.replace("/", "__")))
-    out_dir.mkdir(parents=True, exist_ok=True)
+    total_bytes = 0
+    downloaded_bytes = 0
 
-    log.info("Prefetch model: repo_id=%s → %s", repo_id, out_dir)
+    def _tqdm_factory(*_args, **kwargs):
+        class _Reporter:
+            def __init__(self, total=None, **_kw):
+                nonlocal total_bytes
+                try:
+                    total_bytes = int(total or 0)
+                except (TypeError, ValueError):
+                    total_bytes = 0
 
-    api = HfApi()
-    try:
-        info = api.model_info(repo_id, revision=revision)
-    except Exception as exc:  # pragma: no cover - network issues
-        log.error("HF API probe failed for %s: %s", repo_id, exc)
-        raise
+            def update(self, n):
+                nonlocal downloaded_bytes
+                try:
+                    delta = int(n or 0)
+                except (TypeError, ValueError):
+                    delta = 0
+                downloaded_bytes += delta
+                if on_progress:
+                    on_progress(downloaded_bytes, total_bytes)
 
-    matched_siblings = [s for s in info.siblings or [] if _patterns_match(s.rfilename)]
-    total_remote_bytes = sum((s.size or 0) for s in matched_siblings)
-    log.info(
-        "Remote snapshot contains %d tracked files (%.2f MB)",
-        len(matched_siblings),
-        total_remote_bytes / (1024 * 1024) if total_remote_bytes else 0.0,
+            def close(self):
+                pass
+
+        return _Reporter(total=kwargs.get("total"))
+
+    start = time.time()
+    log.info("Prefetch model: repo_id=%s → %s", repo_id, path)
+    if on_status:
+        on_status("Подключение к Hugging Face…")
+
+    snapshot_path = snapshot_download(
+        repo_id=repo_id,
+        local_dir=str(path),
+        local_dir_use_symlinks=False,
+        allow_patterns=TRACKED_FILES,
+        resume_download=True,
+        max_workers=4,
+        tqdm_class=_tqdm_factory,
     )
 
-    stop_event = threading.Event()
-    watcher = threading.Thread(
-        target=_log_model_bin_growth,
-        args=(out_dir, stop_event, total_remote_bytes),
-        daemon=True,
-    )
-    watcher.start()
-    try:
-        snapshot_download(
-            repo_id=repo_id,
-            revision=revision,
-            local_dir=str(out_dir),
-            local_dir_use_symlinks=False,
-            allow_patterns=list(REQUIRED_PATTERNS),
-            resume_download=True,
-            max_workers=4,
-            tqdm_class=TqdmToLogger,
-            etag_timeout=30,
-        )
-    finally:
-        stop_event.set()
-        watcher.join(timeout=2)
+    required_patterns = ["model.bin", "model.bin.*", "tokenizer.json", "config.json"]
+    missing: list[str] = []
+    snapshot_root = Path(snapshot_path)
+    for pattern in required_patterns:
+        if "*" in pattern:
+            if not any(snapshot_root.glob(pattern)):
+                missing.append(pattern)
+        else:
+            if not (snapshot_root / pattern).is_file():
+                missing.append(pattern)
+    if missing:
+        raise RuntimeError(f"Модель скачана не полностью, отсутствуют: {', '.join(missing)}")
 
-    required_bins = list(out_dir.glob("model.bin*"))
-    if not required_bins:
-        raise FileNotFoundError(f"model.bin* not found in {out_dir}")
-    if not (out_dir / "config.json").exists():
-        raise FileNotFoundError(f"config.json not found in {out_dir}")
-    if not (out_dir / "tokenizer.json").exists():
-        raise FileNotFoundError(f"tokenizer.json not found in {out_dir}")
-
-    total_bytes = sum(p.stat().st_size for p in out_dir.glob("**/*") if p.is_file())
-    total_files = sum(1 for _ in out_dir.rglob("*"))
-    log.info("Model ready at %s (%.2f MB, %d files)", out_dir, total_bytes / (1024 ** 2), total_files)
-    return out_dir
+    elapsed = time.time() - start
+    size_on_disk = sum(f.stat().st_size for f in Path(snapshot_path).rglob("*") if f.is_file())
+    log.info("Model ready at %s (%s) за %.1f с", snapshot_path, _bytes_fmt(size_on_disk), elapsed)
+    if on_status:
+        on_status(f"Модель готова ({_bytes_fmt(size_on_disk)} за {elapsed:.1f}с)")
+    if on_progress:
+        on_progress(downloaded_bytes or size_on_disk, total_bytes or size_on_disk)
+    return str(snapshot_path)
