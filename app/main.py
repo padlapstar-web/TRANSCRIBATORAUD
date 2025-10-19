@@ -1,15 +1,22 @@
 """Entry point for TRANSCRIBATORAUD application."""
 from __future__ import annotations
 
-import argparse
 import os
+from app.utils.streams import hook_gui_streams
+
+# Гарантируем корректные stdout/stderr и отключаем прогресс-бары HF до любых импортов hub.
+hook_gui_streams()
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+os.environ.setdefault("HF_HUB_ENABLE_XET", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+import argparse
 import sys
 from pathlib import Path
 from typing import Sequence
-
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 from app.cli import run_cli
 from app.core.ffmpeg import find_ffmpeg

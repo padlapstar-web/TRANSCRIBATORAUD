@@ -49,6 +49,7 @@ def setup_logging(debug: bool = False) -> str:
     hf_level = logging.DEBUG if debug else logging.WARNING
     logging.getLogger("huggingface_hub").setLevel(hf_level)
     logging.getLogger("hf_transfer").setLevel(hf_level)
+    logging.getLogger("ext.stderr").setLevel(logging.DEBUG)
     logging.getLogger("ctranslate2").setLevel(logging.DEBUG if debug else logging.INFO)
 
     setattr(root, _LOGGER_ATTR, True)
