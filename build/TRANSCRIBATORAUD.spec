@@ -29,7 +29,10 @@ pathex = [str(PROJECT_ROOT), str(SPEC_DIR)]
 
 app_entry = PROJECT_ROOT / "app" / "main.py"
 
-hiddenimports = collect_submodules("app")
+app_hidden = collect_submodules("app")
+hub_hidden = collect_submodules("huggingface_hub")
+transfer_hidden = collect_submodules("hf_transfer")
+hiddenimports = list({*app_hidden, *hub_hidden, *transfer_hidden})
 
 a = Analysis(
     [str(app_entry)],

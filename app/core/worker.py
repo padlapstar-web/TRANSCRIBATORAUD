@@ -5,6 +5,7 @@ import logging
 import os
 import queue
 import shlex
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -57,6 +58,20 @@ def _periodic_log(message: str, delay: float = 30.0, interval: float = 5.0):
         thread.join(timeout=1)
 
 
+def _gpu_name() -> str:
+    candidate = shutil.which("nvidia-smi")
+    if not candidate:
+        return "nvidia-smi not found"
+    try:
+        result = subprocess.run([candidate, "--query-gpu=name,pci.bus_id", "--format=csv,noheader"], capture_output=True, text=True, check=False)
+        output = (result.stdout or "").strip()
+        if output:
+            return output
+    except Exception as exc:  # pragma: no cover - diagnostics only
+        LOGGER.debug("Failed to query GPU name: %r", exc)
+    return "unknown GPU"
+
+
 def _validate_local_model_dir(path: Path) -> Path:
     if not path.exists() or not path.is_dir():
         raise FileNotFoundError(f"Model directory not found: {path}")
@@ -97,6 +112,9 @@ def load_model_with_timeout(
 ) -> Tuple[WhisperModel, str, str]:
     """Initialise a WhisperModel with optional CUDA and a timeout."""
 
+    os.environ.setdefault("CT2_VERBOSE", "1")
+    os.environ.setdefault("CT2_LOG_LEVEL", "INFO")
+
     repo_path = Path(repo_id)
     if repo_path.exists():
         local_dir = _validate_local_model_dir(repo_path)
@@ -108,6 +126,8 @@ def load_model_with_timeout(
 
     device_try = "cuda" if prefer_cuda else "cpu"
     compute_try = compute_type_cuda if prefer_cuda else compute_type_cpu
+
+    LOGGER.info("Preparing Whisper initialisation (target=%s/%s, allow_download=%s)", device_try, compute_try, allow_download)
 
     result_queue: "queue.Queue[Tuple[WhisperModel, str, str] | Exception]" = queue.Queue()
 
@@ -143,8 +163,10 @@ def load_model_with_timeout(
         raise result
 
     model, device_used, compute_used = result
+    device_descriptor = _gpu_name() if device_used == "cuda" else "CPU"
     try:
         LOGGER.info("Model initialized OK at %s (%s/%s)", local_dir, device_used, compute_used)
+        LOGGER.info("Active device details: %s", device_descriptor)
     except Exception:  # pragma: no cover - logging shouldn't break execution
         pass
     return model, device_used, compute_used
@@ -312,7 +334,11 @@ class TranscribeWorker(QThread):  # pragma: no cover - exercised via GUI runtime
         except Exception as exc:
             self._had_error = True
             self._logger.exception("Model initialisation failed")
-            self._emit_error(f"Model init error: {exc!r} ({type(exc).__name__})")
+            if isinstance(exc, TimeoutError):
+                friendly = "Инициализация превысила лимит времени. Проверьте сеть/CDN или используйте офлайн модель."
+            else:
+                friendly = f"Model init error: {exc!r} ({type(exc).__name__})"
+            self._emit_error(friendly)
             self.finished_all.emit()
             return
 

@@ -70,3 +70,4 @@ build/*.log
 Thumbs.db
 .vscode/
 .idea/
+TranscribatorAud/

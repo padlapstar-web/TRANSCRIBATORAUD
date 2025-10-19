@@ -152,6 +152,18 @@ if ($Clean) {
 
     Write-Host "Cleaning previous artefacts..." -ForegroundColor Cyan
 
+    if (Test-Path $distDir) {
+        $procs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like (Join-Path $distDir 'TRANSCRIBATORAUD*.exe') }
+        foreach ($p in $procs) {
+            Write-Host "Killing $($p.ProcessName) (PID $($p.Id))" -ForegroundColor Yellow
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Milliseconds 400
+        Get-ChildItem $distDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+            try { $_.IsReadOnly = $false } catch {}
+        }
+    }
+
     if (Test-Path $distDir)  { Remove-Path-Retry -Path $distDir  -MaxRetries 15 -DelaySec 1 }
     if (Test-Path $buildDir) { Remove-Path-Retry -Path $buildDir -MaxRetries 15 -DelaySec 1 }
 

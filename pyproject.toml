@@ -11,11 +11,14 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "faster-whisper",
+    "ctranslate2",
     "PySide6",
     "soundfile",
     "tqdm",
     "pyyaml",
     "requests",
+    "huggingface-hub[hf_xet]>=0.23",
+    "hf-transfer>=0.1",
 ]
 
 [project.optional-dependencies]

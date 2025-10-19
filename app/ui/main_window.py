@@ -105,9 +105,12 @@ else:
                 self.model_combo.addItem(value)
             self.model_combo.setCurrentText("small")
             self.prefetch_button = QtWidgets.QPushButton("Скачать модель сейчас")
+            self.prefetch_status = QtWidgets.QCheckBox("Модель скачана локально")
+            self.prefetch_status.setEnabled(False)
             model_row = QtWidgets.QHBoxLayout()
             model_row.addWidget(self.model_combo)
             model_row.addWidget(self.prefetch_button)
+            model_row.addWidget(self.prefetch_status)
             form_layout.addRow("Модель:", model_row)
 
             self.device_combo = QtWidgets.QComboBox()
@@ -310,29 +313,36 @@ else:
             if self._prefetch_thread and self._prefetch_thread.isRunning():
                 return
             selector = self.model_combo.currentText()
-            self._append_log(f"Скачивание модели {selector}…")
-            self._update_status("Скачивание модели…")
+            self.prefetch_status.setChecked(False)
+            message = f"Скачивание модели {selector}: подключение к Hugging Face…"
+            self._append_log(message)
+            self._update_status(message)
             self.prefetch_button.setEnabled(False)
+            logging.getLogger("huggingface_hub").setLevel(logging.INFO)
+            logging.getLogger("app.core.model_prefetch").setLevel(logging.INFO)
             self._prefetch_thread = ModelPrefetchThread(selector, self)
             self._prefetch_thread.finished.connect(self._on_prefetch_finished)
             self._prefetch_thread.start()
 
         def _on_prefetch_finished(self, success: bool, payload: str) -> None:
             self.prefetch_button.setEnabled(True)
-            self._update_status("Готово", 5000)
             thread = self._prefetch_thread
             self._prefetch_thread = None
             if thread is not None:
                 thread.deleteLater()
             if success:
+                self.prefetch_status.setChecked(True)
                 self._append_log(f"Модель загружена: {payload}")
+                self._update_status("Модель готова локально", 5000)
                 QtWidgets.QMessageBox.information(
                     self,
                     "Загрузка модели",
                     f"Модель сохранена в {payload}",
                 )
             else:
+                self.prefetch_status.setChecked(False)
                 self._append_log(f"Ошибка загрузки модели: {payload}")
+                self._update_status("Ошибка загрузки модели", 5000)
                 QtWidgets.QMessageBox.critical(
                     self,
                     "Загрузка модели",
@@ -427,6 +437,10 @@ else:
             self.progress_bar.setValue(0)
             self._set_controls_enabled(False)
             self._update_status("Инициализация модели…")
+
+            init_message = ("Инициализация модели (%s/%s)…" % (self.device_combo.currentText(), self.compute_combo.currentText()))
+            self._append_log(init_message)
+            self._update_status(init_message)
 
             config = JobConfig(
                 ffmpeg=self._ffmpeg_path,
