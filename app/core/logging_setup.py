@@ -54,3 +54,16 @@ def setup_logging(debug: bool = False) -> str:
 
     setattr(root, _LOGGER_ATTR, True)
     return str(log_file)
+
+
+def get_file_log_path_fallback() -> Optional[Path]:
+    """Return the active file handler path if logging is already configured."""
+
+    root = logging.getLogger()
+    for handler in root.handlers:
+        if isinstance(handler, logging.FileHandler):
+            try:
+                return Path(handler.baseFilename)
+            except Exception:
+                continue
+    return None
