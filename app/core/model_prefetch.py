@@ -80,7 +80,23 @@ def patch_tokenizer_json_if_needed(model_dir: Path) -> None:
         entry = existing.get(token)
         token_id = vocab_ids.get(token)
         if token_id is None:
-            log.warning("Special token %r missing in vocabulary.txt; skip patch", token)
+            if entry is not None:
+                log.warning(
+                    "Special token %r absent in vocabulary.txt; removing invalid added token entry",
+                    token,
+                )
+                added_tokens[:] = [
+                    candidate
+                    for candidate in added_tokens
+                    if not (
+                        isinstance(candidate, dict)
+                        and candidate.get("content") == token
+                    )
+                ]
+                existing.pop(token, None)
+                changed = True
+            else:
+                log.warning("Special token %r missing in vocabulary.txt; skip patch", token)
             continue
         payload = {"id": int(token_id), "content": token, "special": True}
         if entry is not None and isinstance(entry, dict):
