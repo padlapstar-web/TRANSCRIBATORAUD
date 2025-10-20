@@ -1,0 +1,73 @@
+# Build directories and virtual environments
+/dist/
+/build/**
+!/build/*.ps1
+!/build/*.bat
+!/build/*.spec
+/out/
+/.venv/
+venv/
+env/
+.env
+
+# Python caches and extensions
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+
+# Binary artefacts (must never be committed)
+/resources/ffmpeg/**
+!/resources/ffmpeg/.gitkeep
+*.exe
+*.dll
+*.pyd
+*.zip
+*.7z
+*.tar
+*.gz
+*.xz
+*.rar
+*.whl
+*.bin
+*.lib
+*.dylib
+*.a
+*.iso
+*.img
+
+# Media and models
+*.wav
+*.mp3
+*.flac
+*.aac
+*.m4a
+*.ogg
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.onnx
+*.pt
+*.pth
+*.safetensors
+
+# Runtime downloads
+models/
+cache/
+
+# Tooling
+build/output/
+build/cache/
+build/pyinstaller/
+build/*.log
+
+# PyInstaller manifests
+*.manifest
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+TranscribatorAud/

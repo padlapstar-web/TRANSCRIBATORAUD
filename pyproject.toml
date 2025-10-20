@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transcribatoraud"
+version = "0.1.0"
+description = "Offline batch audio transcription toolkit"
+authors = [{ name = "Transcribator AUD Team" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "faster-whisper",
+    "ctranslate2",
+    "PySide6",
+    "soundfile",
+    "tqdm",
+    "pyyaml",
+    "requests",
+    "huggingface-hub[hf_xet]>=0.23",
+    "hf-transfer>=0.1",
+    "filelock",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["app"]
