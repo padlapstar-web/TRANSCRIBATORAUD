@@ -1,31 +1,19 @@
-"""Application entry-point orchestrating logging console spawning."""
+"""Executable entry point for launching the TranscribatorAud GUI."""
 from __future__ import annotations
 
 import argparse
 import logging
 import os
 import sys
-from pathlib import Path
+from typing import List
 
 os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
+def _install_global_hooks() -> None:
+    """Capture uncaught exceptions and Qt messages into the application log."""
 
-def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--log-console", action="store_true", default=False)
-    try:
-        ns, remainder = parser.parse_known_args(argv)
-    except SystemExit:
-        class _NS:
-            log_console = False
-
-        return _NS(), argv
-    return ns, remainder
-
-
-def _install_excepthook() -> None:
-    def _hook(exc_type, exc, tb):
+    def _excepthook(exc_type, exc, tb):
         logging.critical("Uncaught exception", exc_info=(exc_type, exc, tb))
         try:
             sys.__excepthook__(exc_type, exc, tb)
@@ -38,29 +26,65 @@ def _install_excepthook() -> None:
                     except Exception:
                         pass
 
-    sys.excepthook = _hook
+    sys.excepthook = _excepthook
+
+    try:
+        from PySide6.QtCore import QtMsgType, qInstallMessageHandler
+
+        def _qt_handler(mode, context, message):
+            level_map = {
+                QtMsgType.QtDebugMsg: logging.DEBUG,
+                QtMsgType.QtInfoMsg: logging.INFO,
+                QtMsgType.QtWarningMsg: logging.WARNING,
+                QtMsgType.QtCriticalMsg: logging.ERROR,
+                QtMsgType.QtFatalMsg: logging.CRITICAL,
+            }
+            logging.log(level_map.get(mode, logging.INFO), "Qt: %s (%s:%s)", message, context.file, context.line)
+
+        qInstallMessageHandler(_qt_handler)
+    except Exception:
+        pass
 
 
-def _maybe_spawn_log_console() -> None:
-    from app.core.logging_setup import get_file_log_path_fallback, setup_logging
-    from app.utils.log_console import spawn_detached_log_console
+def _parse_args(argv: List[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--debug-console", action="store_true", help="Open dedicated log console window")
+    try:
+        ns, remainder = parser.parse_known_args(argv)
+    except SystemExit:
+        class _NS:
+            debug_console = False
+        ns = _NS()
+        remainder = argv
+    sys.argv = [sys.argv[0], *remainder]
+    return ns
 
-    log_path = get_file_log_path_fallback()
-    if log_path is None:
-        log_path = Path(setup_logging(debug=True))
-    spawn_detached_log_console(log_path)
+
+def _should_launch_console(ns: argparse.Namespace) -> bool:
+    env_flag = os.environ.get("TRANSCRIBATORAUD_LOG_CONSOLE")
+    if env_flag == "0":
+        return False
+    if ns.debug_console or env_flag == "1":
+        return True
+    if getattr(sys, "frozen", False):
+        return True
+    return False
 
 
 def main() -> None:
-    argv = sys.argv[1:]
-    ns, remainder = _parse_args(argv)
-    sys.argv = [sys.argv[0], *remainder]
+    args = _parse_args(sys.argv[1:])
 
-    _install_excepthook()
+    from app.logging_setup import setup_logging
+    from app.utils.log_console import launch_log_console
 
-    want_console = ns.log_console or os.environ.get("TRANSCRIBATORAUD_LOG_CONSOLE") == "1"
-    if want_console and sys.platform == "win32":
-        _maybe_spawn_log_console()
+    log_path = setup_logging()
+    _install_global_hooks()
+
+    if _should_launch_console(args) and sys.platform == "win32":
+        try:
+            launch_log_console(log_path)
+        except Exception:
+            logging.exception("Failed to launch log console")
 
     from app import main as app_main
 

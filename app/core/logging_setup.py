@@ -1,69 +1,14 @@
-"""Comprehensive logging configuration for GUI and CLI modes."""
+"""Compatibility wrapper for the relocated logging setup helpers."""
 from __future__ import annotations
 
-import logging
-from logging.handlers import RotatingFileHandler
-from pathlib import Path
-from typing import Optional
+from app.logging_setup import (
+    get_file_log_path_fallback,
+    get_log_file_path,
+    setup_logging,
+)
 
-from app.core.paths import APP_DIR
-
-_LOGGER_ATTR = "_transcribatoraud_logging_configured"
-
-
-def _logs_root() -> Path:
-    return APP_DIR / "logs"
-
-
-def setup_logging(debug: bool = False) -> str:
-    """Initialise application-wide logging and return the log file path."""
-
-    log_dir = _logs_root()
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "app.log"
-
-    level = logging.DEBUG if debug else logging.INFO
-    fmt = "%(asctime)s [%(levelname)s] [%(threadName)s] %(name)s: %(message)s"
-
-    root = logging.getLogger()
-    already_configured: Optional[bool] = getattr(root, _LOGGER_ATTR, None)
-
-    if already_configured:
-        root.setLevel(level)
-        for handler in root.handlers:
-            handler.setLevel(level)
-        return str(log_file)
-
-    root.setLevel(level)
-
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(level)
-    stream_handler.setFormatter(logging.Formatter(fmt))
-    root.addHandler(stream_handler)
-
-    file_handler = RotatingFileHandler(log_file, maxBytes=5_000_000, backupCount=5, encoding="utf-8")
-    file_handler.setLevel(level)
-    file_handler.setFormatter(logging.Formatter(fmt))
-    root.addHandler(file_handler)
-
-    hf_level = logging.DEBUG if debug else logging.WARNING
-    logging.getLogger("huggingface_hub").setLevel(hf_level)
-    logging.getLogger("hf_transfer").setLevel(hf_level)
-    logging.getLogger("ext.stderr").setLevel(logging.DEBUG)
-    logging.getLogger("ctranslate2").setLevel(logging.DEBUG if debug else logging.INFO)
-
-    setattr(root, _LOGGER_ATTR, True)
-    return str(log_file)
-
-
-def get_file_log_path_fallback() -> Optional[Path]:
-    """Return the active file handler path if logging is already configured."""
-
-    root = logging.getLogger()
-    for handler in root.handlers:
-        if isinstance(handler, logging.FileHandler):
-            try:
-                return Path(handler.baseFilename)
-            except Exception:
-                continue
-    return None
+__all__ = [
+    "get_file_log_path_fallback",
+    "get_log_file_path",
+    "setup_logging",
+]

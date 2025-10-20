@@ -1,7 +1,7 @@
 import argparse
 import logging
 
-from app.core.logging_setup import setup_logging
+from app.logging_setup import setup_logging
 from app.core.model_prefetch import ensure_model
 from app.core.models import resolve_repo_id
 from app.core.paths import MODELS_DIR

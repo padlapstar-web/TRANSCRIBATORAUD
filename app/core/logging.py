@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from app.core.logging_setup import setup_logging as _setup_logging
+from app.logging_setup import setup_logging as _setup_logging
 
 
 def setup_logging(debug: bool = False) -> logging.Logger:

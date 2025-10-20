@@ -20,7 +20,7 @@ from typing import Sequence
 
 from app.cli import run_cli
 from app.core.ffmpeg import find_ffmpeg
-from app.core.logging_setup import setup_logging
+from app.logging_setup import setup_logging
 from app.diagnostics.runtime_info import dump_runtime_info
 
 
