@@ -30,34 +30,76 @@ _REQUIRED_JSON = ("config.json", "tokenizer.json")
 VOCABULARY_CANDIDATES: Tuple[str, ...] = ("vocabulary.json", "vocabulary.txt")
 _SPECIAL_TOKENS = (
     "<|startoftranscript|>",
-    "<|endoftext|>",
     "<|nospeech|>",
     "<|notimestamps|>",
 )
 
 
-def patch_tokenizer_special_tokens(tokenizer_path: Path) -> None:
-    data, error = _load_json(tokenizer_path)
-    if data is None:
-        log.warning("Tokenizer %s invalid (%s); skipping special token patch", tokenizer_path, error)
+def _read_vocabulary_ids(vocab_path: Path) -> dict[str, int]:
+    ids: dict[str, int] = {}
+    try:
+        with vocab_path.open("r", encoding="utf-8") as handle:
+            for index, line in enumerate(handle):
+                token = line.rstrip("\n")
+                if token:
+                    ids[token] = index
+    except Exception as exc:  # pragma: no cover - diagnostics only
+        log.warning("Failed to read vocabulary.txt (%s): %s", vocab_path, exc)
+    return ids
+
+
+def patch_tokenizer_json_if_needed(model_dir: Path) -> None:
+    tokenizer_path = model_dir / "tokenizer.json"
+    vocab_path = model_dir / "vocabulary.txt"
+    if not tokenizer_path.exists() or not vocab_path.exists():
+        log.debug("Tokenizer patch skipped: %s or %s missing", tokenizer_path, vocab_path)
+        return
+
+    try:
+        data = json.loads(tokenizer_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover - diagnostics only
+        log.warning("Tokenizer %s invalid (%s); skipping patch", tokenizer_path, exc)
+        return
+    if not isinstance(data, dict):
+        log.warning("Tokenizer %s has unexpected structure; skipping patch", tokenizer_path)
+        return
+
+    vocab_ids = _read_vocabulary_ids(vocab_path)
+    if not vocab_ids:
+        log.warning("Vocabulary %s empty or unreadable; skipping tokenizer patch", vocab_path)
         return
 
     added_tokens = data.setdefault("added_tokens", [])
     existing = {
-        entry.get("content")
+        entry.get("content"): entry
         for entry in added_tokens
         if isinstance(entry, dict) and "content" in entry
     }
     changed = False
     for token in _SPECIAL_TOKENS:
-        if token in existing:
+        entry = existing.get(token)
+        token_id = vocab_ids.get(token)
+        if token_id is None:
+            log.warning("Special token %r missing in vocabulary.txt; skip patch", token)
             continue
-        added_tokens.append({"content": token, "special": True})
-        existing.add(token)
-        changed = True
-    if changed:
-        tokenizer_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        log.info("Tokenizer %s patched with special tokens", tokenizer_path)
+        payload = {"id": int(token_id), "content": token, "special": True}
+        if entry is not None and isinstance(entry, dict):
+            if entry.get("id") != token_id or not entry.get("special"):
+                entry.update(payload)
+                changed = True
+        else:
+            added_tokens.append(payload)
+            existing[token] = payload
+            changed = True
+
+    if not changed:
+        log.debug("Tokenizer %s already contains required special tokens", tokenizer_path)
+        return
+
+    tmp_path = tokenizer_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(tokenizer_path)
+    log.info("Tokenizer %s patched with vocabulary-aligned special tokens", tokenizer_path)
 
 _HF_API = HfApi()
 _LOCK_TIMEOUT = 600
@@ -475,6 +517,21 @@ def ensure_model(
     local_path = _expand(local_dir)
     local_path.mkdir(parents=True, exist_ok=True)
 
+    local_ok, _ = validate_snapshot(local_path)
+
+    if force_files:
+        local_ok = False  # force explicit downloads regardless of current state
+
+    if local_ok:
+        patch_tokenizer_json_if_needed(local_path)
+        if on_progress:
+            try:
+                on_progress(1, 1)
+            except Exception:
+                log.exception("progress callback failed")
+        _log_snapshot_diagnostics(local_path, repo_id, None)
+        return str(local_path)
+
     if offline or not allow_download:
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
         revision: Optional[str] = None
@@ -526,9 +583,7 @@ def ensure_model(
     else:
         log.info("Пропускаем загрузку модели из сети (offline=%s allow_download=%s)", offline, allow_download)
 
-    tokenizer_candidate = local_path / "tokenizer.json"
-    if tokenizer_candidate.exists():
-        patch_tokenizer_special_tokens(tokenizer_candidate)
+        patch_tokenizer_json_if_needed(local_path)
 
     attempts = 0
     full_refresh_performed = False
@@ -581,5 +636,5 @@ __all__ = [
     "ensure_model",
     "validate_snapshot",
     "VOCABULARY_CANDIDATES",
-    "patch_tokenizer_special_tokens",
+    "patch_tokenizer_json_if_needed",
 ]

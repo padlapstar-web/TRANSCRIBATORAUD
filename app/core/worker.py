@@ -17,11 +17,12 @@ import sys
 
 from faster_whisper import WhisperModel
 
-from app.core.asr import Word, segments_to_words
+from app.core.asr import Word
+from app.core.backends import ASRBackend, FasterWhisperBackend, TorchWhisperBackend
 from app.core.exporter import EXPORTERS, normalise_formats
 from app.core.model_prefetch import VOCABULARY_CANDIDATES, ensure_model, validate_snapshot
 from app.core.models import resolve_repo_id
-from app.core.paths import MODELS_DIR
+from app.core.paths import MODELS_DIR, TORCH_MODELS_DIR
 from app.diagnostics.runtime_info import dump_runtime_info
 
 try:  # pragma: no cover - optional dependency for GUI runtime
@@ -36,6 +37,51 @@ except ImportError:  # pragma: no cover - GUI not installed in some environments
 __all__ = ["JobConfig", "TranscribeWorker", "load_whisper"]
 
 LOGGER = logging.getLogger(__name__)
+
+_TORCH_MODEL_MAP = {
+    "tiny": "tiny",
+    "tiny.en": "tiny.en",
+    "base": "base",
+    "base.en": "base.en",
+    "small": "small",
+    "small.en": "small.en",
+    "medium": "medium",
+    "medium.en": "medium.en",
+    "large": "large",
+    "large-v2": "large-v2",
+    "large-v3": "large-v3",
+}
+
+
+def _normalise_model_name(model_name: str) -> str:
+    tail = model_name.strip().lower()
+    if "/" in tail:
+        tail = tail.split("/")[-1]
+    if tail.startswith("faster-whisper-"):
+        tail = tail[len("faster-whisper-") :]
+    return tail
+
+
+def _resolve_torch_model(model_name: str) -> str:
+    normalised = _normalise_model_name(model_name)
+    for key, mapped in _TORCH_MODEL_MAP.items():
+        if normalised == key:
+            return mapped
+    # fallback: try to match by prefix (e.g. "medium-int8")
+    for key, mapped in _TORCH_MODEL_MAP.items():
+        if normalised.startswith(key):
+            return mapped
+    LOGGER.warning("Unknown model '%s' for torch backend; defaulting to 'medium'", model_name)
+    return "medium"
+
+
+def _torch_cuda_available() -> bool:
+    try:
+        import torch  # type: ignore
+
+        return bool(getattr(torch, "cuda", None)) and torch.cuda.is_available()
+    except Exception:  # pragma: no cover - torch optional
+        return False
 class CancelledError(RuntimeError):
     """Raised when the user cancels the running job."""
 
@@ -71,6 +117,38 @@ def _percent(done: int, total: int) -> int:
     if total <= 0:
         return 0
     return max(0, min(100, int(done * 100 / total)))
+
+
+def _try_windows_torch_backend(
+    model_name: str,
+    *,
+    dtype: str,
+    status_cb: Callable[[str], None] | None,
+) -> tuple[ASRBackend, str, str, Path] | None:
+    if sys.platform != "win32":
+        return None
+    if not _torch_cuda_available():
+        return None
+    torch_model = _resolve_torch_model(model_name)
+    cache_dir = TORCH_MODELS_DIR / torch_model.replace("/", "__")
+    try:
+        backend = TorchWhisperBackend(torch_model, device="cuda", dtype=dtype, cache_dir=cache_dir)
+    except ImportError as exc:  # pragma: no cover - torch not installed
+        LOGGER.warning("PyTorch not installed (%s); fallback to CPU", exc)
+        return None
+    except Exception as exc:  # pragma: no cover - backend init issues
+        LOGGER.warning("Torch backend initialisation failed: %s", exc)
+        if status_cb:
+            status_cb("PyTorch backend не запустился, используем CPU.")
+        return None
+    if status_cb:
+        status_cb("Запущен PyTorch backend (CUDA).")
+    LOGGER.info(
+        "Using torch backend %s on CUDA (cache=%s)",
+        backend.info.name,
+        cache_dir,
+    )
+    return backend, "cuda", "float16", cache_dir
 
 
 def _periodic_log(message: str, delay: float = 30.0, interval: float = 5.0):
@@ -109,8 +187,8 @@ def load_whisper(
     offline: bool = False,
     status_cb: Callable[[str], None] | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
-) -> Tuple[WhisperModel, str, str, Path]:
-    """Load a Whisper model ensuring it is available locally with progress hooks."""
+) -> Tuple[ASRBackend, str, str, Path]:
+    """Load a transcription backend ensuring the model is available locally."""
 
     os.environ.setdefault("CT2_VERBOSE", "1")
     os.environ.setdefault("CT2_LOG_LEVEL", "INFO")
@@ -120,6 +198,19 @@ def load_whisper(
 
     if offline:
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
+    torch_candidate: tuple[ASRBackend, str, str, Path] | None = None
+    if prefer_cuda and sys.platform == "win32":
+        torch_candidate = _try_windows_torch_backend(repo_id, dtype=compute_type_cuda, status_cb=status_cb)
+        if torch_candidate is None:
+            LOGGER.warning(
+                "CUDA запрос отклонён: PyTorch backend недоступен или не инициализировался. Используем CPU.",
+            )
+            if status_cb:
+                status_cb("CUDA недоступна, выполняем на CPU.")
+            prefer_cuda = False
+        else:
+            return torch_candidate
 
     if local_override is not None:
         model_dir = _validate_local_model_dir(local_override)
@@ -181,12 +272,6 @@ def load_whisper(
     attempts: list[Tuple[str, str]] = []
     if prefer_cuda and sys.platform != "win32":
         attempts.append(("cuda", compute_type_cuda))
-    elif prefer_cuda and sys.platform == "win32":
-        LOGGER.warning(
-            "CUDA запрос отклонён: CTranslate2 не предоставляет CUDA-билды для Windows."
-        )
-        if status_cb:
-            status_cb("CUDA недоступна на Windows, используем CPU.")
     attempts.append(("cpu", compute_type_cpu))
 
     last_error: Exception | None = None
@@ -194,12 +279,13 @@ def load_whisper(
     for device_name, compute_name in attempts:
         while True:
             try:
-                model = _attempt(device_name, compute_name)
+                model_instance = _attempt(device_name, compute_name)
                 descriptor = _gpu_name() if device_name == "cuda" else "CPU"
                 LOGGER.info("Model initialised using %s/%s (%s)", device_name, compute_name, descriptor)
                 if status_cb:
                     status_cb("Модель инициализирована.")
-                return model, device_name, compute_name, model_dir
+                backend = FasterWhisperBackend(model_instance, device_name, compute_name)
+                return backend, device_name, compute_name, model_dir
             except Exception as exc:
                 last_error = exc
                 LOGGER.warning("Failed to initialise Whisper on %s/%s: %s", device_name, compute_name, exc)
@@ -327,16 +413,9 @@ class TranscribeWorker(QThread):  # pragma: no cover - exercised via GUI runtime
             raise RuntimeError(f"ffmpeg failed for {source}: {stderr}")
         return destination
 
-    def _transcribe_segments(self, model: WhisperModel, wav_path: Path, language: str) -> List[Word]:
+    def _transcribe_segments(self, backend: ASRBackend, wav_path: Path, language: str) -> List[Word]:
         language_arg = None if not language or language.lower() == "auto" else language
-        segments, _info = model.transcribe(
-            str(wav_path),
-            beam_size=self._config.beam_size,
-            language=language_arg,
-            word_timestamps=True,
-            vad_filter=False,
-        )
-        return list(segments_to_words(segments, keep_punct=True))
+        return backend.transcribe(wav_path, language=language_arg, beam_size=self._config.beam_size)
 
     def _export_outputs(self, words: Iterable[Word], source: Path) -> None:
         output_dir = self._config.output_dir
@@ -373,10 +452,11 @@ class TranscribeWorker(QThread):  # pragma: no cover - exercised via GUI runtime
         compute_cpu = compute_raw if compute_raw.startswith("int8") else "int8"
 
         repo_id = resolve_repo_id(self._config.model_name)
+        backend: ASRBackend | None = None
 
         try:
             self._check_cancelled()
-            model, resolved_device, resolved_compute, _model_dir = load_whisper(
+            backend, resolved_device, resolved_compute, _model_dir = load_whisper(
                 repo_id,
                 prefer_cuda=prefer_cuda,
                 compute_type_cuda=compute_cuda,
@@ -391,11 +471,16 @@ class TranscribeWorker(QThread):  # pragma: no cover - exercised via GUI runtime
             self.download_progress.emit(100)
             self._check_cancelled()
             self._log(
-                f"Model ready ({resolved_device}/{resolved_compute}). Starting transcription of {len(self._files)} file(s)."
+                f"Backend {backend.info.engine} готов ({resolved_device}/{resolved_compute}). Обрабатываем {len(self._files)} файл(ов)."
             )
         except CancelledError:
             self._log("Операция отменена пользователем до старта транскрибации.")
             self.finished_all.emit()
+            if backend is not None:
+                try:
+                    backend.close()
+                except Exception:
+                    self._logger.debug("Backend close failed", exc_info=True)
             return
         except Exception as exc:
             self._had_error = True
@@ -406,42 +491,55 @@ class TranscribeWorker(QThread):  # pragma: no cover - exercised via GUI runtime
                 friendly = f"Model init error: {exc!r} ({type(exc).__name__})"
             self.error.emit(friendly)
             self.finished_all.emit()
+            if backend is not None:
+                try:
+                    backend.close()
+                except Exception:
+                    self._logger.debug("Backend close failed", exc_info=True)
             return
 
         total = len(self._files)
         self._log(f"Найдено файлов для обработки: {total}")
-        for index, source in enumerate(self._files, start=1):
-            try:
-                self._check_cancelled()
-            except CancelledError:
-                self._log("Операция отменена пользователем.")
-                break
-            try:
-                self._log(f"[{index}/{total}] Decode: {source.name}")
-                wav_path = self._decode_to_wav(ffmpeg_path, source)
+
+        try:
+            for index, source in enumerate(self._files, start=1):
                 try:
                     self._check_cancelled()
-                    self._log(f"[{index}/{total}] Transcribe: {source.name}")
-                    words = self._transcribe_segments(model, wav_path, self._config.language)
-                    self._export_outputs(words, source)
-                    self._log(f"[{index}/{total}] Done: {source.name}")
-                finally:
+                except CancelledError:
+                    self._log("Операция отменена пользователем.")
+                    break
+                try:
+                    self._log(f"[{index}/{total}] Decode: {source.name}")
+                    wav_path = self._decode_to_wav(ffmpeg_path, source)
                     try:
-                        os.remove(wav_path)
-                    except OSError:
-                        pass
-            except CancelledError:
-                self._log("Операция отменена пользователем.")
-                break
-            except Exception as exc:
-                self._had_error = True
-                self._logger.exception("Failed to process %s", source)
-                self.error.emit(f"Failed to process {source}: {exc!r} ({type(exc).__name__})")
+                        self._check_cancelled()
+                        self._log(f"[{index}/{total}] Transcribe: {source.name}")
+                        assert backend is not None
+                        words = self._transcribe_segments(backend, wav_path, self._config.language)
+                        self._export_outputs(words, source)
+                        self._log(f"[{index}/{total}] Done: {source.name}")
+                    finally:
+                        try:
+                            os.remove(wav_path)
+                        except OSError:
+                            pass
+                except CancelledError:
+                    self._log("Операция отменена пользователем.")
+                    break
+                except Exception as exc:
+                    self._had_error = True
+                    self._logger.exception("Failed to process %s", source)
+                    self.error.emit(f"Failed to process {source}: {exc!r} ({type(exc).__name__})")
 
-            percent = int(index * 100 / total)
-            self.progress.emit(percent)
-
-        self.finished_all.emit()
+                percent = int(index * 100 / total)
+                self.progress.emit(percent)
+        finally:
+            self.finished_all.emit()
+            if backend is not None:
+                try:
+                    backend.close()
+                except Exception:
+                    self._logger.debug("Backend close failed", exc_info=True)
 
     @property
     def had_error(self) -> bool:
