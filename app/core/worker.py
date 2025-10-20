@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, List, Sequence, Tuple
 
+import sys
+
 from faster_whisper import WhisperModel
 
 from app.core.asr import Word, segments_to_words
@@ -104,6 +106,7 @@ def load_whisper(
     timeout_sec: int = 600,
     local_override: Path | None = None,
     allow_download: bool = True,
+    offline: bool = False,
     status_cb: Callable[[str], None] | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
 ) -> Tuple[WhisperModel, str, str, Path]:
@@ -111,6 +114,12 @@ def load_whisper(
 
     os.environ.setdefault("CT2_VERBOSE", "1")
     os.environ.setdefault("CT2_LOG_LEVEL", "INFO")
+
+    if not offline and os.environ.get("TRANSCRIBATORAUD_OFFLINE") == "1":
+        offline = True
+
+    if offline:
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
     if local_override is not None:
         model_dir = _validate_local_model_dir(local_override)
@@ -124,6 +133,8 @@ def load_whisper(
                 str(target_dir),
                 on_status=status_cb,
                 on_progress=progress_cb,
+                allow_download=allow_download,
+                offline=offline,
             )
         )
 
@@ -132,6 +143,8 @@ def load_whisper(
             progress_cb(1, 1)
         except Exception:
             LOGGER.exception("progress callback failed")
+
+    timeout_limit = max(60, int(timeout_sec))
 
     def _attempt(device: str, compute: str) -> WhisperModel:
         if status_cb:
@@ -156,18 +169,24 @@ def load_whisper(
 
         thread = threading.Thread(target=_target, daemon=True)
         thread.start()
-        thread.join(timeout_sec)
+        thread.join(timeout_limit)
         if thread.is_alive():
-            LOGGER.error("Model init timeout after %s sec", timeout_sec)
-            raise TimeoutError(f"Model initialization exceeded {timeout_sec} seconds")
+            LOGGER.error("Model init timeout after %s sec", timeout_limit)
+            raise TimeoutError(f"Model initialization exceeded {timeout_limit} seconds")
         result = result_queue.get()
         if isinstance(result, Exception):
             raise result
         return result
 
     attempts: list[Tuple[str, str]] = []
-    if prefer_cuda:
+    if prefer_cuda and sys.platform != "win32":
         attempts.append(("cuda", compute_type_cuda))
+    elif prefer_cuda and sys.platform == "win32":
+        LOGGER.warning(
+            "CUDA запрос отклонён: CTranslate2 не предоставляет CUDA-билды для Windows."
+        )
+        if status_cb:
+            status_cb("CUDA недоступна на Windows, используем CPU.")
     attempts.append(("cpu", compute_type_cpu))
 
     last_error: Exception | None = None
@@ -223,6 +242,8 @@ class JobConfig:
     beam_size: int = 1
     local_model_dir: Path | None = None
     allow_download: bool = True
+    offline: bool = False
+    init_timeout: int = 600
 
 
 class TranscribeWorker(QThread):  # pragma: no cover - exercised via GUI runtime
@@ -360,9 +381,10 @@ class TranscribeWorker(QThread):  # pragma: no cover - exercised via GUI runtime
                 prefer_cuda=prefer_cuda,
                 compute_type_cuda=compute_cuda,
                 compute_type_cpu=compute_cpu,
-                timeout_sec=600,
+                timeout_sec=self._config.init_timeout,
                 local_override=self._config.local_model_dir,
                 allow_download=self._config.allow_download,
+                offline=self._config.offline or not self._config.allow_download,
                 status_cb=self._emit_status,
                 progress_cb=self._emit_download_progress,
             )

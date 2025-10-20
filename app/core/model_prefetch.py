@@ -35,6 +35,30 @@ _SPECIAL_TOKENS = (
     "<|notimestamps|>",
 )
 
+
+def patch_tokenizer_special_tokens(tokenizer_path: Path) -> None:
+    data, error = _load_json(tokenizer_path)
+    if data is None:
+        log.warning("Tokenizer %s invalid (%s); skipping special token patch", tokenizer_path, error)
+        return
+
+    added_tokens = data.setdefault("added_tokens", [])
+    existing = {
+        entry.get("content")
+        for entry in added_tokens
+        if isinstance(entry, dict) and "content" in entry
+    }
+    changed = False
+    for token in _SPECIAL_TOKENS:
+        if token in existing:
+            continue
+        added_tokens.append({"content": token, "special": True})
+        existing.add(token)
+        changed = True
+    if changed:
+        tokenizer_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        log.info("Tokenizer %s patched with special tokens", tokenizer_path)
+
 _HF_API = HfApi()
 _LOCK_TIMEOUT = 600
 _DOWNLOAD_PATTERNS = [
@@ -439,7 +463,10 @@ def ensure_model(
     local_dir: str,
     on_status: Optional[Callable[[str], None]] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    *,
     force_files: Optional[Sequence[str]] = None,
+    allow_download: bool = True,
+    offline: bool = False,
 ) -> str:
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
@@ -448,12 +475,16 @@ def ensure_model(
     local_path = _expand(local_dir)
     local_path.mkdir(parents=True, exist_ok=True)
 
-    revision: Optional[str] = None
-    try:
-        info = _HF_API.model_info(repo_id)
-        revision = getattr(info, "sha", None)
-    except Exception as exc:  # pragma: no cover - diagnostics only
-        log.debug("Failed to fetch model info for %s: %s", repo_id, exc)
+    if offline or not allow_download:
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        revision: Optional[str] = None
+    else:
+        revision = None
+        try:
+            info = _HF_API.model_info(repo_id)
+            revision = getattr(info, "sha", None)
+        except Exception as exc:  # pragma: no cover - diagnostics only
+            log.debug("Failed to fetch model info for %s: %s", repo_id, exc)
 
     if force_files:
         _status_callback(on_status, "Повторная загрузка выбранных файлов модели…")
@@ -488,10 +519,16 @@ def ensure_model(
         except Exception:
             log.exception("progress callback failed")
 
-    _status_callback(on_status, "Подключение к Hugging Face…")
+    if not offline and allow_download:
+        _status_callback(on_status, "Подключение к Hugging Face…")
+        if not force_files:
+            _safe_snapshot(repo_id, local_path, force_download=False)
+    else:
+        log.info("Пропускаем загрузку модели из сети (offline=%s allow_download=%s)", offline, allow_download)
 
-    if not force_files:
-        _safe_snapshot(repo_id, local_path, force_download=False)
+    tokenizer_candidate = local_path / "tokenizer.json"
+    if tokenizer_candidate.exists():
+        patch_tokenizer_special_tokens(tokenizer_candidate)
 
     attempts = 0
     full_refresh_performed = False
@@ -501,9 +538,13 @@ def ensure_model(
             break
         attempts += 1
         if attempts == 1:
+            if offline or not allow_download:
+                break
             _redownload_problem_files(repo_id, local_path, issues, on_status)
             continue
         if not full_refresh_performed:
+            if offline or not allow_download:
+                break
             _status_callback(on_status, "Полная повторная загрузка модели…")
             with _download_lock(local_path):
                 for entry in local_path.iterdir():
@@ -520,6 +561,12 @@ def ensure_model(
         details = ", ".join(f"{name}: {reason}" for name, reason in issues.items())
         raise RuntimeError(f"Не удалось восстановить модель {repo_id}: {details}")
 
+    if not ok:
+        details = ", ".join(f"{name}: {reason}" for name, reason in issues.items())
+        raise RuntimeError(
+            "Локальная модель повреждена, а загрузка отключена: " + details
+        )
+
     if on_progress:
         try:
             on_progress(1, 1)
@@ -530,4 +577,9 @@ def ensure_model(
     return str(local_path)
 
 
-__all__ = ["ensure_model", "validate_snapshot", "VOCABULARY_CANDIDATES"]
+__all__ = [
+    "ensure_model",
+    "validate_snapshot",
+    "VOCABULARY_CANDIDATES",
+    "patch_tokenizer_special_tokens",
+]

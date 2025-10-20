@@ -527,6 +527,7 @@ else:
                 beam_size=1,
                 local_model_dir=local_model_dir,
                 allow_download=allow_download,
+                offline=not allow_download,
             )
 
             logging.getLogger("huggingface_hub").setLevel(logging.INFO)
